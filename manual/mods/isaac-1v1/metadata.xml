@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<metadata>
+    <name>Isaac 1v1</name>
+    <directory>isaac-1v1</directory>
+    <description>Minimal development foundation for Isaac 1v1.</description>
+    <version>0.1.0-rc1</version>
+    <visibility>0</visibility>
+</metadata>

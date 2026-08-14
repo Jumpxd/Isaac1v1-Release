@@ -1,0 +1,162 @@
+local matchResult = {}
+local exitRequested = false
+local lastResultMatchId = nil
+local exitRequestedAt = nil
+local exitFailureLogged = false
+local resetMatchId = nil
+local terminalResultPendingMatchId = nil
+local pendingResult = nil
+local resultTransitionScheduled = false
+local resultTransitionExecuted = false
+local resultTransitionUpdates = 0
+local waitingForBackendLogged = false
+local waitingForSafeUpdateLogged = false
+local liveIPC = nil
+local SAFE_TRANSITION_UPDATE_DELAY = 30
+
+local function quote(value)
+    return '"' .. tostring(value):gsub('"', "'") .. '"'
+end
+
+local function now()
+    if Isaac ~= nil and type(Isaac.GetTime) == "function" then return Isaac.GetTime() / 1000 end
+    return os.clock()
+end
+
+local function stopCompetitiveRun(result)
+    if exitRequested then return false end
+    exitRequested = true
+    exitRequestedAt = now()
+    exitFailureLogged = false
+    if liveIPC ~= nil and liveIPC.BeginCompetitiveResultTransition ~= nil then
+        pcall(liveIPC.BeginCompetitiveResultTransition, result.matchId)
+    end
+    if Game ~= nil then
+        local ok, game = pcall(Game)
+        if ok and game ~= nil and type(game.Fadeout) == "function"
+            and FadeoutTarget ~= nil and FadeoutTarget.SAVEFILE_MENU ~= nil then
+            local fadeOk = pcall(game.Fadeout, game, 0.25, FadeoutTarget.SAVEFILE_MENU)
+            if fadeOk then
+                Isaac.DebugString("[Isaac1v1] COMPETITIVE_RUN_EXIT_REQUESTED method=\"Game.Fadeout\" target=\"SAVEFILE_MENU\"")
+                Isaac.DebugString("[Isaac1v1] RESULT_TRANSITION_EXECUTED match_id=" .. quote(result.matchId))
+                return true
+            end
+        end
+    end
+    Isaac.DebugString("[Isaac1v1] COMPETITIVE_RUN_EXIT_FAILED")
+    exitFailureLogged = true
+    return false
+end
+
+local function checkExitFailure()
+    if not exitRequested or exitFailureLogged or exitRequestedAt == nil then return end
+    if now() - exitRequestedAt < 5 then return end
+    if MenuManager ~= nil and type(MenuManager.IsActive) == "function" then
+        local ok, active = pcall(MenuManager.IsActive)
+        if ok and active == true then
+            return
+        end
+    end
+    exitFailureLogged = true
+    Isaac.DebugString("[Isaac1v1] COMPETITIVE_RUN_EXIT_FAILED reason=\"MENU_CONTEXT_TIMEOUT\"")
+end
+
+function matchResult.BeginNewMatch(matchId)
+    if type(matchId) ~= "string" or matchId == "" then return false end
+    if resetMatchId == matchId then return true end
+    resetMatchId = matchId
+    exitRequested = false
+    exitRequestedAt = nil
+    exitFailureLogged = false
+    lastResultMatchId = nil
+    terminalResultPendingMatchId = nil
+    pendingResult = nil
+    resultTransitionScheduled = false
+    resultTransitionExecuted = false
+    resultTransitionUpdates = 0
+    waitingForBackendLogged = false
+    waitingForSafeUpdateLogged = false
+    Isaac.DebugString("[Isaac1v1] RESULT_STATE_RESET match_id=" .. quote(matchId))
+    return true
+end
+
+function matchResult.MarkFinalDeathPending(matchId)
+    if type(matchId) ~= "string" or matchId == "" then return false end
+    if terminalResultPendingMatchId == matchId then return true end
+    terminalResultPendingMatchId = matchId
+    pendingResult = nil
+    resultTransitionScheduled = false
+    resultTransitionExecuted = false
+    resultTransitionUpdates = 0
+    waitingForBackendLogged = false
+    waitingForSafeUpdateLogged = false
+    Isaac.DebugString("[Isaac1v1] FINAL_DEATH_RESULT_PENDING match_id=" .. quote(matchId))
+    return true
+end
+
+local function scheduleResultTransition(result)
+    if resultTransitionScheduled or resultTransitionExecuted then return end
+    pendingResult = result
+    resultTransitionScheduled = true
+    resultTransitionUpdates = 0
+    Isaac.DebugString("[Isaac1v1] RESULT_TRANSITION_SCHEDULED match_id=" .. quote(result.matchId))
+end
+
+local function advanceResultTransition()
+    if not resultTransitionScheduled or resultTransitionExecuted or pendingResult == nil then return end
+    resultTransitionUpdates = resultTransitionUpdates + 1
+    if resultTransitionUpdates <= SAFE_TRANSITION_UPDATE_DELAY then
+        if not waitingForSafeUpdateLogged then
+            waitingForSafeUpdateLogged = true
+            Isaac.DebugString("[Isaac1v1] RESULT_TRANSITION_WAITING reason=\"SAFE_UPDATE_DELAY\" match_id="
+                .. quote(pendingResult.matchId))
+        end
+        return
+    end
+    if stopCompetitiveRun(pendingResult) then
+        resultTransitionExecuted = true
+        resultTransitionScheduled = false
+    end
+end
+
+function matchResult.Register(mod, ipc, session, menu, competitiveRun)
+    liveIPC = ipc
+    local resultCallback = ModCallbacks.MC_POST_RENDER or ModCallbacks.MC_POST_UPDATE
+    mod:AddCallback(resultCallback, function()
+        if liveIPC == nil or liveIPC.GetStatus == nil then return end
+        local ok, status = pcall(liveIPC.GetStatus)
+        if not ok or status == nil then return end
+        if status.result == nil then
+            if terminalResultPendingMatchId ~= nil and not waitingForBackendLogged then
+                waitingForBackendLogged = true
+                Isaac.DebugString("[Isaac1v1] RESULT_TRANSITION_WAITING reason=\"BACKEND_RESULT\" match_id="
+                    .. quote(terminalResultPendingMatchId))
+            end
+            return
+        end
+        local resultMatchId = status.result.matchId
+        local isPendingFinalDeath = terminalResultPendingMatchId ~= nil
+            and terminalResultPendingMatchId == resultMatchId
+        local wasCompetitive = competitiveRun ~= nil and competitiveRun.WasCompetitiveMatch ~= nil
+            and competitiveRun.WasCompetitiveMatch(resultMatchId)
+        if not isPendingFinalDeath and not wasCompetitive then return end
+        if lastResultMatchId ~= resultMatchId then
+            exitRequested = false
+            exitRequestedAt = nil
+            exitFailureLogged = false
+            lastResultMatchId = resultMatchId
+            if competitiveRun.Deactivate ~= nil then competitiveRun.Deactivate("RESULT") end
+            Isaac.DebugString("[Isaac1v1] MATCH_RESULT_RECEIVED match_id=" .. quote(resultMatchId))
+            if menu ~= nil and menu.ShowResult ~= nil then
+                pcall(menu.ShowResult, status.result)
+            end
+            scheduleResultTransition(status.result)
+            return
+        end
+        advanceResultTransition()
+        checkExitFailure()
+    end)
+    Isaac.DebugString("[Isaac1v1] Match result transition initialized")
+end
+
+return matchResult
