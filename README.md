@@ -17,6 +17,34 @@
 - dacă ieși din run, închizi Isaac sau pierzi conexiunea după începerea meciului, meciul este abandonat și adversarul câștigă.
 
 
+## Moduri permise în meciurile competitive
+
+Poți activa orice combinație a modurilor de mai jos. Modul `isaac-1v1` și REPENTOGON sunt permise automat. Orice alt mod trebuie dezactivat înainte de matchmaking, altfel meniul va afișa `MOD NOT ALLOWED`.
+
+- Dynamic Minisaacs Forever! — Workshop `3388446591`
+- Very Haunted Chests — Workshop `2487822714`
+- cry — Workshop `2652244684`
+- Unique MEGAIsaacs — Workshop `2697721144`
+- Unique C-Section Fetuses! — Workshop `2821675000`
+- Alternate Hairstyles! — Workshop `3402926130`
+- unintrusive pause menu — Workshop `2769063897`
+- Fireworks for Good Items — Workshop `3397128781`
+- [AB+|Rep(+)] External Item Descriptions — Workshop `836319872`
+- TimeMachine[Repentance] — Workshop `2617557401`
+- Luckier Pennies — Workshop `2487805547`
+- Not Mad, Just Disappointed for Quality 0 Items — Workshop `2612456876`
+- Better Explosions — Workshop `2879232973`
+- Improved Chargebars [REP+] — Workshop `2851861015`
+- Antibirth music++ [OBSOLETE] — Workshop `1547034524`
+- Custom Mr Dollys — Workshop `2489635144`
+- Garry's Mod Death Animation — Workshop `2788453409`
+- Animated Items — Workshop `2570913695`
+- Regret Pedestals — Workshop `2766379837`
+- Better Character Menu — Workshop `835236871`
+- [REP(+)] Enhanced Boss Bars — Workshop `2635267643`
+- Planetarium Chance [REP+] — Workshop `2489006943`
+- Specialist Dance for Good Items — Workshop `2575911103`
+
 ## Varianta 1 — Setup automat (recomandat)
 
 Descarcă și pornește [Isaac1v1Setup.exe](./Isaac1v1Setup.exe).
