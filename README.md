@@ -1,3 +1,5 @@
+ISAAC 1v1 Alpha v1.0
+
 
 ## Cum funcționează Isaac 1v1
 
