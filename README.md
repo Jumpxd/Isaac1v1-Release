@@ -14,6 +14,26 @@ Companion-ul folosește backend-ul Production:
 - REPENTOGON `v1.1.2e` sau mai nou din familia `v1.1.2`
 - Isaac build `v1.9.7.12.J273`
 
+## Cum funcționează Isaac 1v1
+
+Isaac 1v1 este o cursă competitivă între doi jucători. Nu jucați în aceeași cameră: fiecare primește propriul run, dar ambii pornesc cu același personaj, același seed, dificultatea Hard și aceleași condiții de joc.
+
+1. Ambii jucători pornesc Steam, Companion-ul și Isaac prin REPENTOGON.
+2. Din meniul principal Isaac, apasă `F8` pentru a deschide meniul `ISAAC 1V1`.
+3. Intră în matchmaking și așteaptă găsirea unui adversar.
+4. După `MATCH FOUND`, ambii jucători trebuie să confirme că sunt `READY`.
+5. Run-ul competitiv pornește automat pentru ambii. Meniul afișează adversarul, personajul și seed-ul meciului.
+6. Scorurile sunt trimise live prin Companion și sunt afișate în interfața 1v1.
+
+### Cum se decide câștigătorul
+
+- dacă un jucător moare definitiv, pierde imediat, indiferent de scor;
+- dacă un jucător finalizează run-ul, câștigă jucătorul cu scorul mai mare;
+- la scor egal, rezultatul este `DRAW`;
+- dacă ieși din run, închizi Isaac sau pierzi conexiunea după începerea meciului, meciul este abandonat și adversarul câștigă.
+
+Meciurile competitive nu au reconectare. După rezultat, Companion-ul și meniul Isaac afișează `VICTORY`, `DEFEAT` sau `DRAW`, împreună cu scorurile finale.
+
 ## Varianta 1 — Setup automat (recomandat)
 
 Descarcă și pornește [Isaac1v1Setup.exe](./Isaac1v1Setup.exe).
