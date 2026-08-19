@@ -47,21 +47,7 @@ Poți activa orice combinație a modurilor de mai jos. Modul `isaac-1v1` și REP
 - Planetarium Chance [REP+] — Workshop `2489006943`
 - Specialist Dance for Good Items — Workshop `2575911103`
 
-## Varianta 1 — Setup automat (recomandat)
-
-Descarcă și pornește [Isaac1v1Setup.exe](./Isaac1v1Setup.exe).
-
-Setup-ul:
-
-1. detectează instalarea Steam a jocului;
-2. verifică REPENTOGON și versiunea Isaac;
-3. instalează sau actualizează modul `isaac-1v1`;
-4. instalează `zhlIsaac1v1IPC.dll` în runtime-ul REPENTOGON;
-5. instalează Companion-ul și creează shortcut-ul.
-
-Închide Isaac și REPENTOGON Launcher înainte de instalare.
-
-## Varianta 2 — Instalare manuală
+## Instalare manuală
 
 Poți descărca toate componentele manuale într-un singur pachet:
 
@@ -120,7 +106,7 @@ Dacă apare acest mesaj, verifică:
 - `REPENTOGON_NOT_FOUND`: folderul REPENTOGON sau versiunea jocului nu a fost detectată;
 - `ISAAC1V1_MOD_MISSING`: lipsește `<Isaac>\mods\isaac-1v1\metadata.xml`;
 - `NATIVE_COMPONENT_MISSING`: lipsește `<Isaac>\Repentogon\zhlIsaac1v1IPC.dll`;
-- `NATIVE_COMPONENT_HASH_MISMATCH`: DLL-ul instalat nu corespunde versiunii din installer.
+- `NATIVE_COMPONENT_HASH_MISMATCH`: DLL-ul instalat nu corespunde versiunii publicate.
 
 După corectarea fișierelor, apasă `REFRESH` în Companion.
 
