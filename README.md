@@ -56,17 +56,9 @@ Poți activa orice combinație a modurilor de mai jos. Modul `isaac-1v1` și REP
 - Planetarium Chance [REP+] — Workshop `2489006943`
 - Specialist Dance for Good Items — Workshop `2575911103`
 
-## Instalare cu Setup (recomandat)
-
-Este necesar The Binding of Isaac: Repentance+ prin Steam și REPENTOGON compatibil.
-Închide Isaac și REPENTOGON Launcher, apoi descarcă și rulează:
-
-[Isaac1v1Setup.exe v0.1.1-alpha.1](https://github.com/Jumpxd/Isaac1v1-Release/releases/download/v0.1.1-alpha.1/Isaac1v1Setup.exe)
-
-Setup instalează împreună Companion-ul Production, DLL-ul REPENTOGON și versiunea curentă a modului.
-
 ## Instalare manuală
 
+Este necesar The Binding of Isaac: Repentance+ prin Steam și REPENTOGON compatibil.
 Poți descărca toate componentele manuale într-un singur pachet:
 
 [Isaac1v1-Manual.zip](./Isaac1v1-Manual.zip)
