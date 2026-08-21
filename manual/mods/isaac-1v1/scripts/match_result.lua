@@ -1,3 +1,5 @@
+-- Coordonează RESULT. Așteaptă MATCH_RESULT_FINAL valid, îl trimite meniului 1v1
+-- și face o singură tranziție sigură din run-ul terminat.
 local matchResult = {}
 local exitRequested = false
 local lastResultMatchId = nil
@@ -24,6 +26,8 @@ local function now()
 end
 
 local function stopCompetitiveRun(result)
+    -- Face tranziția vizuală către meniul de save o singură dată pentru fiecare rezultat.
+    -- Întoarce true numai dacă Game.Fadeout a acceptat cererea.
     if exitRequested then return false end
     exitRequested = true
     exitRequestedAt = now()
@@ -62,6 +66,7 @@ local function checkExitFailure()
 end
 
 function matchResult.BeginNewMatch(matchId)
+    -- Șterge toate stările de rezultat și tranziție pentru un ID nou de meci.
     if type(matchId) ~= "string" or matchId == "" then return false end
     if resetMatchId == matchId then return true end
     resetMatchId = matchId
@@ -80,7 +85,25 @@ function matchResult.BeginNewMatch(matchId)
     return true
 end
 
+function matchResult.ResetTerminal()
+    exitRequested = false
+    exitRequestedAt = nil
+    exitFailureLogged = false
+    lastResultMatchId = nil
+    terminalResultPendingMatchId = nil
+    pendingResult = nil
+    resultTransitionScheduled = false
+    resultTransitionExecuted = false
+    resultTransitionUpdates = 0
+    waitingForBackendLogged = false
+    waitingForSafeUpdateLogged = false
+    resetMatchId = nil
+    return true
+end
+
 function matchResult.MarkFinalDeathPending(matchId)
+    -- MOARTE: memorează faptul că run-ul se poate opri înainte să vină rezultatul,
+    -- astfel încât MATCH_RESULT_FINAL să rămână legat de meciul corect.
     if type(matchId) ~= "string" or matchId == "" then return false end
     if terminalResultPendingMatchId == matchId then return true end
     terminalResultPendingMatchId = matchId
@@ -95,6 +118,7 @@ function matchResult.MarkFinalDeathPending(matchId)
 end
 
 local function scheduleResultTransition(result)
+    -- Păstrează datele rezultatului și pornește o scurtă așteptare măsurată în actualizări.
     if resultTransitionScheduled or resultTransitionExecuted then return end
     pendingResult = result
     resultTransitionScheduled = true
@@ -103,6 +127,7 @@ local function scheduleResultTransition(result)
 end
 
 local function advanceResultTransition()
+    -- Este apelată de callback-ul rezultatului; după așteptare face un singur fadeout.
     if not resultTransitionScheduled or resultTransitionExecuted or pendingResult == nil then return end
     resultTransitionUpdates = resultTransitionUpdates + 1
     if resultTransitionUpdates <= SAFE_TRANSITION_UPDATE_DELAY then
@@ -120,9 +145,13 @@ local function advanceResultTransition()
 end
 
 function matchResult.Register(mod, ipc, session, menu, competitiveRun)
+    -- Folosește POST_RENDER sau, ca rezervă, POST_UPDATE. Astfel poate continua
+    -- să verifice rezultatul și după game over, când alte callback-uri se pot opri.
     liveIPC = ipc
     local resultCallback = ModCallbacks.MC_POST_RENDER or ModCallbacks.MC_POST_UPDATE
     mod:AddCallback(resultCallback, function()
+        -- RESULT: așteaptă status.result din liveIPC, ignoră rezultate din alte meciuri,
+        -- afișează ecranul dedicat și continuă tranziția la apelurile următoare.
         if liveIPC == nil or liveIPC.GetStatus == nil then return end
         local ok, status = pcall(liveIPC.GetStatus)
         if not ok or status == nil then return end

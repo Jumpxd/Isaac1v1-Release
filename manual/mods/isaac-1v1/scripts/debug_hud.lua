@@ -1,3 +1,5 @@
+-- HUD de dezvoltare INACTIV pentru verificarea run-ului, sesiunii și punctajului.
+-- main.lua nu încarcă acest modul, deci nu este afișat în fluxul curent.
 local debugHud = {}
 local renderLogged = false
 local renderErrorLogged = false
@@ -26,6 +28,8 @@ local function readScore(gameState)
 end
 
 function debugHud.Register(mod, gameState, matchValidation, matchSession, matchBridge, liveIPC)
+    -- Dacă este înregistrat manual, MC_POST_RENDER afișează date de diagnostic pentru
+    -- run-ul activ și citește punctajul adversarului din liveIPC în STARTED.
     mod:AddCallback(ModCallbacks.MC_POST_RENDER, function()
         local ok, err = pcall(function()
             local activeOk, active = pcall(gameState.isRunActive)

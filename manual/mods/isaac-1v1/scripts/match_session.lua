@@ -1,3 +1,5 @@
+-- Sesiunea validă a meciului păstrată în memorie. Este creată dintr-un MATCH_START
+-- live verificat și nu este restaurată dintr-un SaveData vechi.
 local MatchSession = {}
 local activeSession = nil
 
@@ -6,6 +8,8 @@ local function quote(value)
 end
 
 local function copySession(session)
+    -- Copiază numai câmpurile cunoscute de mod. Astfel, mesajul IPC original
+    -- nu poate schimba sesiunea după ce aceasta a devenit activă.
     return {
         matchId = session.matchId,
         playerId = session.playerId,
@@ -15,6 +19,8 @@ local function copySession(session)
         seed = session.seed,
         difficulty = session.difficulty,
         gameMode = session.gameMode,
+        targetDestinationId = session.targetDestinationId,
+        targetDestinationName = session.targetDestinationName,
         startGeneration = session.startGeneration,
         startToken = session.startToken,
         sessionToken = session.sessionToken,
@@ -28,6 +34,8 @@ local function copySession(session)
 end
 
 function MatchSession.Set(session)
+    -- Este apelată de run_launcher după acceptarea MATCH_START. Înlocuiește toate
+    -- datele sesiunii și întoarce copia salvată sau nil pentru date invalide.
     if session == nil then
         MatchSession.Clear()
         return nil
@@ -39,17 +47,20 @@ function MatchSession.Set(session)
             "[Isaac1v1] MATCH_SESSION_LOADED " ..
             "match_id=" .. quote(activeSession.matchId or "Unknown") .. " " ..
             "character=" .. quote(activeSession.characterName or "Unknown") .. " " ..
-            "seed=" .. quote(activeSession.seed or "ANY")
+            "seed=" .. quote(activeSession.seed or "ANY") .. " " ..
+            "target=" .. quote(activeSession.targetDestinationName or "Unknown")
         )
     end
     return activeSession
 end
 
 function MatchSession.Get()
+    -- Întoarce sesiunea curentă din memorie; matchId este identitatea ei.
     return activeSession
 end
 
 function MatchSession.Clear()
+    -- Este apelată la reset, la un run normal sau la Continue, ca să elimine datele vechi.
     if activeSession ~= nil then
         Isaac.DebugString(
             "[Isaac1v1] MATCH_SESSION_CLEARED match_id=" ..
@@ -60,6 +71,7 @@ function MatchSession.Clear()
 end
 
 function MatchSession.IsActive()
+    -- Verificare simplă folosită de validare și de lifecycle.
     return activeSession ~= nil and activeSession.active == true
 end
 

@@ -1,3 +1,5 @@
+-- Verifică dacă run-ul pornit de Isaac corespunde sesiunii competitive primite:
+-- personaj, seed, dificultate, mod de joc și etaj activ.
 local matchValidation = {}
 
 local lastResult = {valid = false, reasons = {"NO_MATCH_SESSION"}}
@@ -54,6 +56,8 @@ local function emitValidationLog(session, result, gameState)
 end
 
 function matchValidation.Validate(session, gameState)
+    -- Este apelată în MC_POST_GAME_STARTED înainte de confirmarea STARTED. Păstrează
+    -- și întoarce {valid, reasons}; nu schimbă run-ul și nu trimite singură IPC.
     if session == nil or session.active ~= true then
         lastResult = {valid = false, reasons = {"NO_MATCH_SESSION"}}
         emitValidationLog(session, lastResult, gameState)
@@ -108,6 +112,7 @@ function matchValidation.Validate(session, gameState)
 end
 
 function matchValidation.Reset()
+    -- Șterge rezultatul verificării vechi atunci când începe un meci nou.
     lastResult = {valid = false, reasons = {"NO_MATCH_SESSION"}}
     lastLogKey = nil
 end

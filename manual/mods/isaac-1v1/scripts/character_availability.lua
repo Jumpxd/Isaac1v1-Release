@@ -1,3 +1,5 @@
+-- Trimite către Companion personajele competitive deblocate local. Verificarea
+-- se face în meniul principal, iar lista este retrimisă numai dacă s-a schimbat.
 local characterAvailability = {}
 local characterCatalog = include("scripts/character_catalog.lua")
 local lastSignature = nil
@@ -8,13 +10,14 @@ local function getConfig(characterType)
 end
 
 local function isUnlocked(characterType, persistent, config)
+    -- Citește EntityConfig și PersistentGameData și exclude personajele ascunse sau blocate.
     if config == nil or type(config.GetAchievementID) ~= "function" then return characterType == 0 end
     local achievementOk, achievement = pcall(config.GetAchievementID, config)
     if not achievementOk then return characterType == 0 end
     if achievement == -2 then return false end -- hidden vanilla entry, not selectable
     if achievement == -1 then
-        -- Not achievement-gated; still exclude a config explicitly marked as
-        -- hidden by the character menu data.
+        -- Personajul nu cere achievement, dar este exclus dacă meniul de personaje
+        -- îl marchează în mod explicit ca ascuns.
         local hiddenOk, hidden = type(config.IsHidden) == "function" and pcall(config.IsHidden, config)
         return not (hiddenOk and hidden == true)
     end
@@ -23,6 +26,8 @@ local function isUnlocked(characterType, persistent, config)
 end
 
 function characterAvailability.ReportIfChanged(liveIPC)
+    -- Este apelată din MC_MAIN_MENU_RENDER în main.lua. Construiește lista de
+    -- personaje permise și deblocate, apoi trimite PLAYER_AVAILABILITY dacă s-a schimbat.
     if liveIPC == nil or type(liveIPC.SetAvailableCharacterTypes) ~= "function"
         or Isaac == nil or type(Isaac.GetPersistentGameData) ~= "function"
         or EntityConfig == nil or type(EntityConfig.GetPlayer) ~= "function" then return end

@@ -1,3 +1,5 @@
+-- O vedere doar pentru citire asupra run-ului curent. Celelalte module folosesc
+-- aceste funcții pentru validare, loguri, scor live și scorul de final.
 local gameState = {}
 
 local characterNames = {
@@ -61,6 +63,8 @@ local stageNames = {
 }
 
 local function safeCall(callback, fallback)
+    -- API-urile Isaac nu sunt disponibile în orice meniu sau stare. Dacă citirea
+    -- eșuează, funcția întoarce o valoare sigură în loc să oprească un callback.
     local ok, value = pcall(callback)
     if ok and value ~= nil and tostring(value) ~= "" then
         return value
@@ -69,6 +73,7 @@ local function safeCall(callback, fallback)
 end
 
 function gameState.getCharacterName()
+    -- Întoarce numele personajului jucătorului 0 sau "Unknown" dacă nu există run activ.
     return safeCall(function()
         local player = Isaac.GetPlayer(0)
         if player == nil then
@@ -79,6 +84,7 @@ function gameState.getCharacterName()
 end
 
 function gameState.getPlayerTypeId()
+    -- Întoarce PlayerType numeric, folosit pentru comparația cu MATCH_START.
     return safeCall(function()
         local player = Isaac.GetPlayer(0)
         if player == nil then
@@ -89,6 +95,7 @@ function gameState.getPlayerTypeId()
 end
 
 function gameState.getSeedString()
+    -- Întoarce seed-ul de start în formatul afișat, de exemplu ABCD EFGH.
     return safeCall(function()
         local seed = Game():GetSeeds():GetStartSeed()
         return Seeds.Seed2String(seed)
@@ -96,6 +103,7 @@ function gameState.getSeedString()
 end
 
 function gameState.getFloorName()
+    -- Creează un nume ușor de citit pentru etaj, folosit în logurile meciului.
     return safeCall(function()
         local level = Game():GetLevel()
         local name = level:GetName()
@@ -125,6 +133,7 @@ function gameState.getDifficultyValue()
 end
 
 function gameState.getDifficultyName()
+    -- Transformă constantele de dificultate Isaac în numele folosite de protocol.
     return safeCall(function()
         local difficulty = Game().Difficulty
         if difficulty == Difficulty.DIFFICULTY_NORMAL then
@@ -147,6 +156,7 @@ function gameState.isGreedMode()
 end
 
 function gameState.getGameModeName()
+    -- Meciurile competitive cer STANDARD; variantele Greed sunt identificate aici.
     return safeCall(function()
         local game = Game()
         if not game:IsGreedMode() then
@@ -169,6 +179,7 @@ function gameState.getRunTime()
 end
 
 function gameState.getVanillaScore()
+    -- Citește scorul REPENTOGON folosit în MATCH_SCORE_UPDATE și la finalul meciului.
     return safeCall(function()
         if REPENTOGON == nil or ScoreSheet == nil or type(ScoreSheet.GetTotalScore) ~= "function" then
             return nil
@@ -204,6 +215,7 @@ function gameState.getRepentogonStatus()
 end
 
 function gameState.isRunActive()
+    -- Întoarce true numai dacă Game():GetFrameCount() arată că este încărcat un run real.
     return safeCall(function()
         local game = Game()
         return game:GetFrameCount() > 0 and game:GetLevel():GetStage() > 0

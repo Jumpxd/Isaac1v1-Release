@@ -1,3 +1,5 @@
+-- Bridge local VECHI/INACTIV care scrie comenzi de lobby în SaveData. Meniul F8
+-- actual nu apelează Emit, ci folosește liveIPC.
 local LocalBridge = {}
 
 local BRIDGE_VERSION = 2
@@ -67,6 +69,7 @@ local function commandError(reason)
 end
 
 function LocalBridge.Initialize(mod, matchSession)
+    -- Păstrează legăturile către mod și sesiune, necesare unei comenzi locale vechi.
     modInstance = mod
     sessionModule = matchSession
     status = "READY"
@@ -75,6 +78,8 @@ function LocalBridge.Initialize(mod, matchSession)
 end
 
 function LocalBridge.Emit(commandType, payload)
+    -- Scrie în SaveData o comandă cu versiune, precum CREATE_LOBBY/JOIN_LOBBY/READY.
+    -- Întoarce succes și ID-ul comenzii sau false și motivul exact.
     if not allowedCommands[commandType] then
         return commandError("UNSUPPORTED_COMMAND")
     end

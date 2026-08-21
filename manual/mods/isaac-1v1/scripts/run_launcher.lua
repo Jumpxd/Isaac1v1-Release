@@ -1,3 +1,5 @@
+-- Pornește run-ul competitiv controlat. Preia un MATCH_START valid, pregătește
+-- destinația de save, apelează Isaac.StartNewGame și confirmă STARTED.
 local runLauncher = {}
 local characterCatalog = include("scripts/character_catalog.lua")
 
@@ -67,9 +69,9 @@ local function getSession(matchSession)
 end
 
 local function isLaunchMenuActive()
-    -- F8 changes the active menu to Isaac 1v1's dedicated custom menu ID.
-    -- Restricting this to MainMenuType.GAME dropped live MATCH_STARTs while
-    -- that menu was open, which left the session at STARTING until restart.
+    -- F8 schimbă meniul activ la ID-ul custom Isaac 1v1. Dacă verificarea s-ar
+    -- limita la MainMenuType.GAME, mesajele MATCH_START sosite în meniul custom
+    -- s-ar pierde, iar sesiunea ar rămâne în STARTING până la restart.
     if MenuManager == nil or type(MenuManager.IsActive) ~= "function" then
         return false
     end
@@ -83,6 +85,8 @@ local function isLaunchMenuActive()
 end
 
 local function canStart(session, gameState, launchRequest)
+    -- Verificare strictă înainte de consumarea cererii. Controlează identitatea și
+    -- configurația sesiunii, API-urile necesare, seed-ul și starea curentă a jocului.
     if session == nil or session.active ~= true then
         return false, "NO_MATCH_SESSION"
     end
@@ -133,6 +137,8 @@ local function canStart(session, gameState, launchRequest)
 end
 
 local function startFromSession(session, gameState, matchBridge, liveIPC, liveStart, competitiveRun, modCompatibility)
+    -- Fluxul de PORNIRE, apelat din callback-ul meniului după sosirea MATCH_START.
+    -- Întoarce true numai după StartNewGame și verificarea destinației de save.
     if liveIPC ~= nil and liveIPC.IsCancelled ~= nil then
         local cancelledOk, cancelled = pcall(liveIPC.IsCancelled, session and session.matchId)
         if cancelledOk and cancelled == true then
@@ -154,6 +160,8 @@ local function startFromSession(session, gameState, matchBridge, liveIPC, liveSt
         return false
     end
     if modCompatibility ~= nil and modCompatibility.GetCompetitiveModCompatibility ~= nil then
+        -- ALLOWLIST: repetă verificarea chiar înainte de pornire. Dacă modurile au
+        -- fost schimbate după intrarea în coadă, run-ul competitiv este blocat.
         local compatibilityOk, result = pcall(modCompatibility.GetCompetitiveModCompatibility)
         if compatibilityOk and result ~= nil and result.compatible == false then
             local names = {}
@@ -204,6 +212,8 @@ local function startFromSession(session, gameState, matchBridge, liveIPC, liveSt
     requestedMatchId = session.matchId
     status = "REQUESTED"
     lastError = nil
+    -- Intenția ajută MC_POST_GAME_STARTED să deosebească această pornire controlată
+    -- de un run normal sau de apăsarea opțiunii Continue.
     if competitiveRun == nil or competitiveRun.SetIntent == nil or competitiveRun.SetIntent(session) ~= true then
         unavailable("COMPETITIVE_INTENT_FAILED")
         return false
@@ -221,6 +231,8 @@ local function startFromSession(session, gameState, matchBridge, liveIPC, liveSt
     end
     local slotOk, slotPrepared, slotError = pcall(
         Isaac1v1IPC.PrepareCompetitiveSaveSlot, session.matchId)
+    -- DESTINAȚIA DE SAVE: inițializarea trebuie să reușească înainte de StartNewGame.
+    -- La eroare, meciul este anulat clar și nu lasă jucătorii blocați în STARTING.
     if not slotOk or slotPrepared ~= true then
         return failConsumedLaunch(
             "COMPETITIVE SAVE INIT FAILED",
@@ -257,6 +269,7 @@ local function startFromSession(session, gameState, matchBridge, liveIPC, liveSt
     end
     local targetOk, targetValid, targetError = pcall(
         Isaac1v1IPC.VerifyCompetitiveSaveTarget, "AFTER_START_NEW_GAME")
+    -- Verifică din nou după apelul engine-ului, deoarece StartNewGame poate schimba save context-ul.
     if not targetOk or targetValid ~= true then
         return failConsumedLaunch(
             "COMPETITIVE SAVE INIT FAILED",
@@ -268,6 +281,8 @@ local function startFromSession(session, gameState, matchBridge, liveIPC, liveSt
 end
 
 local function confirmStarted(session, gameState, matchValidation, competitiveRun)
+    -- Confirmarea STARTED apelată din MC_POST_GAME_STARTED. Compară run-ul real cu
+    -- sesiunea, activează starea competitivă și întoarce ID-ul meciului.
     if requestedMatchId == nil or session == nil or session.matchId ~= requestedMatchId then
         return
     end
@@ -326,6 +341,7 @@ local function confirmStarted(session, gameState, matchValidation, competitiveRu
 end
 
 function runLauncher.BeginNewMatch(matchId)
+    -- Resetează încercarea și eroarea pentru o nouă generație validă de meci.
     if type(matchId) ~= "string" or matchId == "" then return false end
     if resetMatchId == matchId then return true end
     resetMatchId = matchId
@@ -335,6 +351,17 @@ function runLauncher.BeginNewMatch(matchId)
     lastError = nil
     triggerLogged = false
     idleLogged = false
+    return true
+end
+
+function runLauncher.ResetTerminal()
+    attemptedMatchKey = nil
+    requestedMatchId = nil
+    status = "WAITING"
+    lastError = nil
+    triggerLogged = false
+    idleLogged = false
+    resetMatchId = nil
     return true
 end
 
@@ -355,7 +382,10 @@ function runLauncher.GetStatus() return status end
 function runLauncher.GetLastError() return lastError end
 
 function runLauncher.Register(mod, matchSession, gameState, matchValidation, matchBridge, liveIPC, competitiveRun, modCompatibility)
+    -- Instalează cele două callback-uri ale pornirii: consumarea cererii din meniu
+    -- și confirmarea după ce run-ul a pornit.
     mod:AddCallback(ModCallbacks.MC_MAIN_MENU_RENDER, function()
+        -- MATCH_START poate fi consumat în siguranță numai cât timp meniul Isaac este activ.
         if not isLaunchMenuActive() then
             return
         end
@@ -418,6 +448,8 @@ function runLauncher.Register(mod, matchSession, gameState, matchValidation, mat
     end)
 
     mod:AddCallback(ModCallbacks.MC_POST_GAME_STARTED, function()
+        -- Isaac apelează acest callback după crearea run-ului. Aici se fac, în ordine:
+        -- verificarea save-ului, validarea run-ului, activarea și MATCH_STARTED.
         local session = getSession(matchSession)
         if session ~= nil and requestedMatchId == session.matchId then
             local targetOk, targetValid, targetError = pcall(

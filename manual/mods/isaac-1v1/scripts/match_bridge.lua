@@ -1,3 +1,5 @@
+-- Bridge VECHI pentru SaveData. La pornire curăță datele vechi despre launch,
+-- sesiune și reconectare, ca să nu reactiveze un meci după restartarea jocului.
 local MatchBridge = {}
 
 local status = "NO DATA"
@@ -58,9 +60,8 @@ local function startupStatus(session)
     return "PERSISTED"
 end
 
--- SaveData belongs to the previous Isaac process.  It may contain a legacy
--- pre-launch handoff, but it is never evidence that the current process has
--- received a live MATCH_START.
+-- SaveData aparține procesului Isaac anterior. Poate conține o cerere veche de
+-- pornire, dar nu dovedește niciodată că procesul curent a primit MATCH_START live.
 local function clearStartupPendingState(root)
     local savedSession = root.matchSession
     Isaac.DebugString(
@@ -71,8 +72,8 @@ local function clearStartupPendingState(root)
         "source=" .. quote(type(savedSession) == "table" and savedSession.source or "SAVE_DATA")
     )
 
-    -- Keep the document structurally valid for the legacy local bridge, but
-    -- remove every pre-game session/one-shot field from the old process.
+    -- Păstrează documentul valid pentru bridge-ul local vechi, dar șterge toate
+    -- câmpurile de sesiune și comenzile de o singură folosire din procesul anterior.
     root.matchSession = {
         matchId = "startup-cleared",
         playerId = "startup-cleared",
@@ -100,6 +101,8 @@ local function loadJson()
 end
 
 function MatchBridge.Load(mod, matchSession)
+    -- Este apelată o dată de main.lua. Citește și curăță SaveData, scrie o sesiune
+    -- inactivă când este necesar și golește întotdeauna MatchSession din memorie.
     if mod ~= nil then modInstance = mod end
     if matchSession ~= nil then sessionModule = matchSession end
     if mod == nil or mod.HasData == nil or mod.LoadData == nil then
@@ -141,20 +144,20 @@ function MatchBridge.Load(mod, matchSession)
         return bridgeError("SESSION_UNAVAILABLE")
     end
 
-    -- A previous version stored abandoned-match metadata here. It must never
-    -- create a session or influence vanilla Continue in this process.
+    -- O versiune veche salva aici date despre meciul abandonat. Aceste date nu au
+    -- voie să creeze o sesiune sau să influențeze opțiunea vanilla Continue.
     root.competitiveAbandonment = nil
     root["recon" .. "nectPending"] = nil
-    -- Clear before validating legacy fields: malformed old handoff data must
-    -- not survive merely because it cannot be parsed as a launch request.
+    -- Curăță înainte de validarea câmpurilor vechi. Datele invalide nu trebuie să
+    -- rămână doar pentru că nu pot fi interpretate ca cerere de pornire.
     clearStartupPendingState(root)
     local encodeOk, encoded = pcall(json.encode, root)
     if not encodeOk or encoded == nil then return bridgeError("STARTUP_CLEAR_ENCODE_ERROR") end
     local saveOk, saveError = pcall(mod.SaveData, mod, encoded)
     if not saveOk then return bridgeError("STARTUP_CLEAR_SAVE_ERROR: " .. tostring(saveError)) end
 
-    -- Never populate MatchSession or launchRequest from SaveData.  A session
-    -- becomes active only when live_ipc.lua receives MATCH_START this process.
+    -- Nu completează niciodată MatchSession sau launchRequest din SaveData. Sesiunea
+    -- devine activă numai când live_ipc.lua primește MATCH_START în procesul curent.
     if sessionModule.Clear ~= nil then sessionModule.Clear() end
     rootPayload = root
     launchRequest = nil
@@ -176,10 +179,12 @@ local function saveRoot()
 end
 
 function MatchBridge.GetLaunchRequest()
+    -- Variantă de rezervă veche; fluxul live actual primește MATCH_START din liveIPC.
     return launchRequest
 end
 
 function MatchBridge.ConsumeLaunchRequest(matchId)
+    -- Șterge cererea veche potrivită, ca să nu pornească același run de două ori.
     if launchRequest == nil or launchRequest.requested ~= true
         or launchRequest.matchId ~= matchId then
         return false
@@ -207,8 +212,9 @@ function MatchBridge.Reload()
     return MatchBridge.Load(modInstance)
 end
 
--- Development-only manual writer. This is never called automatically.
+-- Funcție manuală doar pentru dezvoltare. Nu este apelată automat niciodată.
 function MatchBridge.WriteDevelopmentPayload(mod)
+    -- Ajutor doar pentru DEVELOPMENT; apelul din main.lua rămâne comentat.
     if mod == nil or mod.SaveData == nil then
         return bridgeError("MOD_DATA_API_UNAVAILABLE")
     end

@@ -1,4 +1,4 @@
-ISAAC 1v1 Alpha v1.0
+ISAAC 1v1 Alpha v0.1.1-alpha.1
 
 
 ## Cum funcționează Isaac 1v1
@@ -8,15 +8,24 @@ ISAAC 1v1 Alpha v1.0
 2. Din meniul principal Isaac, apasă `F8` pentru a deschide meniul `ISAAC 1V1`.
 3. Intră în matchmaking și așteaptă găsirea unui adversar.
 4. După `MATCH FOUND`, ambii jucători trebuie să confirme că sunt `READY`.
-5. Run-ul competitiv pornește automat pentru ambii. Meniul afișează adversarul, personajul și seed-ul meciului.
+5. Run-ul competitiv pornește automat pentru ambii. Meniul afișează adversarul, personajul, seed-ul și target boss-ul meciului.
 6. Scorurile sunt trimise live prin Companion și sunt afișate în interfața 1v1.
 
 ### Cum se decide câștigătorul
 
 - dacă un jucător moare definitiv, pierde imediat, indiferent de scor;
-- dacă un jucător finalizează run-ul, câștigă jucătorul cu scorul mai mare;
+- dacă un jucător omoară target boss-ul corect, run-ul se finalizează și se compară scorul vanilla;
+- dacă un jucător omoară un destination boss incompatibil, pierde cu `WRONG_DESTINATION`;
 - la scor egal, rezultatul este `DRAW`;
 - dacă ieși din run, închizi Isaac sau pierzi conexiunea după începerea meciului, meciul este abandonat și adversarul câștigă.
+
+### Target boss
+
+- serverul alege un singur target random din destinațiile deblocate de ambii jucători;
+- ambii primesc exact același target, seed și personaj;
+- HUD-ul din joc și Companion-ul afișează target-ul negociat;
+- alegerea rutei rămâne responsabilitatea jucătorului;
+- pentru Mother sunt oferite resursele inițiale minime, iar pentru Mega Satan sunt oferite ambele Key Pieces.
 
 
 ## Moduri permise în meciurile competitive
@@ -46,6 +55,15 @@ Poți activa orice combinație a modurilor de mai jos. Modul `isaac-1v1` și REP
 - [REP(+)] Enhanced Boss Bars — Workshop `2635267643`
 - Planetarium Chance [REP+] — Workshop `2489006943`
 - Specialist Dance for Good Items — Workshop `2575911103`
+
+## Instalare cu Setup (recomandat)
+
+Este necesar The Binding of Isaac: Repentance+ prin Steam și REPENTOGON compatibil.
+Închide Isaac și REPENTOGON Launcher, apoi descarcă și rulează:
+
+[Isaac1v1Setup.exe v0.1.1-alpha.1](https://github.com/Jumpxd/Isaac1v1-Release/releases/download/v0.1.1-alpha.1/Isaac1v1Setup.exe)
+
+Setup instalează împreună Companion-ul Production, DLL-ul REPENTOGON și versiunea curentă a modului.
 
 ## Instalare manuală
 
@@ -113,6 +131,11 @@ După corectarea fișierelor, apasă `REFRESH` în Companion.
 ## Verificarea fișierelor
 
 Hash-urile SHA-256 sunt publicate în [SHA256SUMS.txt](./SHA256SUMS.txt).
+Această versiune a fost construită din source commit `fd29db7d02e4d893dba9d06b2481495017f8a647`.
+
+## Statistici
+
+Profilurile și istoricul meciurilor sunt disponibile la [isaac1v1.online](https://isaac1v1.online).
 
 ## Notă de securitate
 

@@ -1,3 +1,5 @@
+-- Exemplu de dezvoltare INACTIV pentru vechiul flux de sesiune LOCAL. main.lua
+-- nu îl încarcă, deci nu participă la matchmaking-ul actual.
 local MatchConfig = {
     matchId = "local-test-001",
     playerId = "local-player",

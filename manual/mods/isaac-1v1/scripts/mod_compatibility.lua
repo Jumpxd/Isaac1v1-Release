@@ -1,3 +1,5 @@
+-- Regula ALLOWLIST. Compară modurile active raportate de Companion cu lista
+-- oficială și blochează coada/pornirea dacă găsește un mod necunoscut.
 local compatibility = {}
 local allowlist = include("scripts/competitive_mod_allowlist.lua")
 
@@ -23,6 +25,8 @@ local implicitAliases = {}
 for _, alias in ipairs(allowlist.implicitAliases or {}) do implicitAliases[normalized(alias)] = true end
 
 local function resolve(active)
+    -- Caută mai întâi după ID-ul Workshop, apoi după folder și aliasuri normalizate.
+    -- Întoarce intrarea oficială și dacă elementul este infrastructură permisă automat.
     local workshopId = tostring(active.workshopId or active.id or "")
     if workshopId ~= "" and byWorkshopId[workshopId] ~= nil then return byWorkshopId[workshopId], false end
     for _, value in ipairs({active.folder, active.directory, active.displayName, active.name}) do
@@ -34,6 +38,8 @@ local function resolve(active)
 end
 
 local function loadedModuleFallback()
+    -- Variantă de rezervă când lipsesc datele Companion. NOTE: căile modulelor Lua
+    -- încărcate nu pot dovedi toate modurile active, iar rezultatul marchează acest lucru.
     local active = {}
     if Isaac == nil or type(Isaac.GetLoadedModules) ~= "function" then return active, "UNAVAILABLE" end
     local ok, modules = pcall(Isaac.GetLoadedModules)
@@ -69,6 +75,7 @@ local function logResult(active, allowed, conflicts)
 end
 
 function compatibility.SetActiveModProvider(provider)
+    -- main.lua oferă liveIPC.GetActiveMods ca sursă principală pentru modurile active.
     if provider ~= nil and type(provider) ~= "function" then return false end
     activeModProvider = provider
     return true
@@ -86,6 +93,8 @@ function compatibility.GetAllowedModMetadata()
 end
 
 function compatibility.GetCompetitiveModCompatibility()
+    -- Este apelată înainte de JOIN_QUEUE și din nou înainte de StartNewGame. Întoarce
+    -- listele permise/blocate fără să modifice configurația modurilor jucătorului.
     local active, detection = nil, "COMPANION_ENABLED_MOD_METADATA"
     if type(activeModProvider) == "function" then
         local ok, value = pcall(activeModProvider)

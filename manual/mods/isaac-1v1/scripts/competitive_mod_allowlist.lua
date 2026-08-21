@@ -1,8 +1,10 @@
+-- Datele ALLOWLIST: ID-uri Workshop, nume și aliasuri verificate pentru modurile
+-- care pot rămâne active în competitive. Acest fișier nu scanează singur modurile.
 local allowlist = {}
 
--- Canonical competitive allowlist. Workshop IDs and aliases were read from
--- the installed metadata.xml files; do not replace them with display-text
--- guesses. Players may enable any subset of these entries.
+-- Lista oficială pentru competitive. ID-urile și aliasurile au fost citite din
+-- metadata.xml ale modurilor instalate; nu trebuie înlocuite cu nume ghicite din UI.
+-- Jucătorul poate activa orice combinație a intrărilor din această listă.
 allowlist.entries = {
     {workshopId = "3388446591", canonicalName = "Dynamic Minisaacs Forever!", aliases = {"minisaacs_inherit_weapons"}},
     {workshopId = "2487822714", canonicalName = "Very Haunted Chests", aliases = {"very haunted chests"}},
@@ -30,5 +32,6 @@ allowlist.entries = {
 }
 
 allowlist.implicitAliases = {"isaac-1v1", "repentogon"}
+-- Mod-ul Isaac 1v1 și REPENTOGON sunt infrastructură și sunt permise automat.
 
 return allowlist

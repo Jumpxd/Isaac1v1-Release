@@ -1,3 +1,5 @@
+-- Legătura IPC dintre Lua și extensia nativă locală Isaac1v1IPC. Modulul validează
+-- protocolul și păstrează starea cozii, meciului, scorului și rezultatului.
 local liveIPC = {}
 
 local PROTOCOL_VERSION = 1
@@ -13,6 +15,7 @@ local lastMessageAt = 0
 local pingCounter = 0
 local pendingPingId = nil
 local availableCharacterTypes = nil
+local availableDestinationIds = nil
 local activeMods = nil
 local competitiveModAllowlistIds = {}
 local competitiveModAllowlist = {}
@@ -44,6 +47,7 @@ local steamIdentityAvailableLogged = false
 local lastSteamIdentityMissingReason = nil
 local lifecycleMatchId = nil
 local matchResetHandler = nil
+local terminalResetHandler = nil
 
 local function now()
     if Isaac ~= nil and type(Isaac.GetTime) == "function" then
@@ -56,13 +60,15 @@ local function log(message)
     Isaac.DebugString("[Isaac1v1] " .. message)
 end
 
--- Session diagnostics must never depend on a global formatter or throw while
--- reporting malformed input.
+-- Logurile despre sesiune nu trebuie să depindă de o funcție globală de formatare
+-- și nu trebuie să producă altă eroare atunci când datele primite sunt invalide.
 local function quote(value)
     return "\"" .. tostring(value == nil and "<nil>" or value):gsub("\"", "'") .. "\""
 end
 
 local function beginNewMatch(payload)
+    -- CICLUL MECIULUI: la primul MATCH_START valid pentru un ID, șterge datele IPC
+    -- ale meciului anterior și apelează resetarea comună definită în main.lua.
     if type(payload) ~= "table" or type(payload.matchId) ~= "string" or payload.matchId == "" then return false end
     if lifecycleMatchId == payload.matchId then return true end
     local previousMatchId = lifecycleMatchId or finalizedMatchId
@@ -89,7 +95,31 @@ local function beginNewMatch(payload)
     return true
 end
 
+local function resetTerminalPresentation()
+    local terminalMatchId = lifecycleMatchId or finalizedMatchId
+    pendingTerminal = nil
+    finalizedMatchId = nil
+    competitiveResultTransition = false
+    scoreSequence = 0
+    lastScore = nil
+    nextScoreAt = 0
+    leaveRequestedAt = nil
+    lastStartKey = nil
+    lifecycleMatchId = nil
+    if type(terminalResetHandler) == "function" then
+        local ok, resetError = pcall(terminalResetHandler, terminalMatchId)
+        if not ok then
+            log("COMPETITIVE_TERMINAL_RESET_FAILED match_id=" .. quote(terminalMatchId)
+                .. " reason=" .. quote(resetError))
+            return false
+        end
+    end
+    return true
+end
+
 local function disconnect(reason)
+    -- Închide numai conexiunea IPC locală și programează o nouă încercare de conectare.
+    -- NOTE: această funcție nu decide singură cine câștigă sau pierde meciul.
     if nativeAPI ~= nil then pcall(nativeAPI.Disconnect) end
     local wasConnected = phase == "CONNECTED"
     phase = "DISCONNECTED"
@@ -103,6 +133,8 @@ local function disconnect(reason)
 end
 
 local function sendEnvelope(messageType, payload)
+    -- Transformă un mesaj în formatul protocolului v1 și îl trimite către Companion.
+    -- Dacă trimiterea eșuează, conexiunea este închisă și Update o poate reface curat.
     if phase ~= "CONNECTED" or nativeAPI == nil or jsonModule == nil then
         return false, "COMPANION_NOT_RUNNING"
     end
@@ -178,6 +210,8 @@ local function refreshSteamIdentity()
 end
 
 local function markConnected()
+    -- IPC: după stabilirea conexiunii locale, cere datele despre player și moduri.
+    -- Retrimite mesajele finale doar dacă trimiterea anterioară a rămas incompletă.
     if phase == "CONNECTED" then return end
     phase = "CONNECTED"
     lastMessageAt = now()
@@ -188,8 +222,11 @@ local function markConnected()
     sendEnvelope("GET_PLAYER_STATE", {})
     sendEnvelope("GET_ACTIVE_MODS", {allowlistIds = competitiveModAllowlistIds, allowlist = competitiveModAllowlist})
     nextActiveModScanAt = now() + 2
-    if availableCharacterTypes ~= nil then
-        sendEnvelope("PLAYER_AVAILABILITY", {availableCharacterTypes = availableCharacterTypes})
+    if availableCharacterTypes ~= nil or availableDestinationIds ~= nil then
+        sendEnvelope("PLAYER_AVAILABILITY", {
+            availableCharacterTypes = availableCharacterTypes,
+            availableDestinationIds = availableDestinationIds
+        })
     end
     if pendingTerminal ~= nil then
         sendEnvelope("MATCH_SCORE_UPDATE", pendingTerminal.scorePayload)
@@ -204,12 +241,14 @@ local function validMatch(payload)
         and type(payload.characterType) == "number"
         and type(payload.characterName) == "string"
         and type(payload.seed) == "string"
+        and type(payload.targetDestinationId) == "string"
+        and type(payload.targetDestinationName) == "string"
         and payload.difficulty == "HARD"
         and payload.gameMode == "STANDARD"
 end
 
 local function sessionPayloadLog(payload)
-    local fields = {"matchId", "playerId", "opponentId", "characterType", "characterName", "seed", "difficulty", "gameMode", "startGeneration", "startToken"}
+    local fields = {"matchId", "playerId", "opponentId", "characterType", "characterName", "seed", "difficulty", "gameMode", "targetDestinationId", "targetDestinationName", "startGeneration", "startToken"}
     local parts = {}
     for _, field in ipairs(fields) do
         local value = payload ~= nil and payload[field] or nil
@@ -220,6 +259,7 @@ local function sessionPayloadLog(payload)
 end
 
 local function sessionValidationReason(payload)
+    -- Validează strict toate câmpurile MATCH_START înainte să schimbe starea de pornire.
     if type(payload) ~= "table" then return "MISSING_FIELD" end
     if type(payload.matchId) ~= "string" or payload.matchId == "" then return "INVALID_MATCH_ID" end
     if type(payload.playerId) ~= "string" or payload.playerId == "" then return "INVALID_PLAYER_ID" end
@@ -229,12 +269,16 @@ local function sessionValidationReason(payload)
     if type(payload.seed) ~= "string" or not payload.seed:match("^[A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9] [A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9]$") then return "INVALID_SEED" end
     if payload.difficulty ~= "HARD" then return "INVALID_DIFFICULTY" end
     if payload.gameMode ~= "STANDARD" then return "INVALID_MODE" end
+    if type(payload.targetDestinationId) ~= "string" or payload.targetDestinationId == "" then return "INVALID_TARGET_DESTINATION" end
+    if type(payload.targetDestinationName) ~= "string" or payload.targetDestinationName == "" then return "INVALID_TARGET_DESTINATION" end
     if type(payload.startGeneration) ~= "number" then return "INVALID_GENERATION" end
     if type(payload.startToken) ~= "string" or payload.startToken == "" then return "INVALID_START_TOKEN" end
     return nil
 end
 
 local function handleMessage(encoded)
+    -- Distribuie mesajele IPC primite. JSON-ul sau protocolul invalid închid
+    -- conexiunea; un mesaj valid schimbă numai partea de stare care îi aparține.
     local decodedOk, message = pcall(jsonModule.decode, encoded)
     if not decodedOk or type(message) ~= "table" then
         disconnect("INVALID_JSON")
@@ -296,12 +340,14 @@ local function handleMessage(encoded)
             end
             if previous == "CANCEL_PENDING" then log("QUEUE_STATE_IDLE_RECEIVED") end
             leaveRequestedAt = nil
+            if previous == "RESULT" then resetTerminalPresentation() end
         elseif previous ~= "SEARCHING" then
             log("QUEUE_SEARCHING")
         end
     elseif message.type == "MATCH_FOUND" then
+        -- CICLUL MECIULUI: păstrează adversarul, personajul și seed-ul pentru ecranul READY.
         findMatchInFlight = false
-        if queueState == "RESULT" then
+        if queueState == "RESULT" and lifecycleMatchId == payload.matchId then
             log("MATCH_MESSAGE_IGNORED_AFTER_RESULT type=\"MATCH_FOUND\"")
             return true
         end
@@ -313,6 +359,10 @@ local function handleMessage(encoded)
             log("MATCH_SESSION_IGNORED_AFTER_CANCEL match_id=\"" .. payload.matchId .. "\"")
             return true
         end
+        if lifecycleMatchId ~= payload.matchId and not beginNewMatch(payload) then
+            onlineError = "MATCH_RESET_FAILED"
+            return true
+        end
         queueState = "MATCH_FOUND"
         matchState = payload
         onlineError = nil
@@ -320,7 +370,8 @@ local function handleMessage(encoded)
             .. "\" character_type=\"" .. tostring(payload.characterType)
             .. "\" seed=\"" .. payload.seed .. "\"")
     elseif message.type == "MATCH_STATE" then
-        if queueState == "RESULT" then
+        -- Copiază starea validă de control: MATCH_FOUND, STARTING sau STARTED.
+        if queueState == "RESULT" and lifecycleMatchId == payload.matchId then
             log("MATCH_MESSAGE_IGNORED_AFTER_RESULT type=\"MATCH_STATE\"")
             return true
         end
@@ -332,6 +383,10 @@ local function handleMessage(encoded)
             log("MATCH_SESSION_IGNORED_AFTER_CANCEL match_id=\"" .. payload.matchId .. "\"")
             return true
         end
+        if lifecycleMatchId ~= payload.matchId and not beginNewMatch(payload) then
+            onlineError = "MATCH_RESET_FAILED"
+            return true
+        end
         matchState = payload
         matchControl = payload
         if payload.status == "STARTING" then queueState = "STARTING"
@@ -339,6 +394,8 @@ local function handleMessage(encoded)
         else queueState = "MATCH_FOUND" end
         log("MATCH_STATE match_id=\"" .. payload.matchId .. "\" status=\"" .. payload.status .. "\"")
     elseif message.type == "MATCH_START" then
+        -- PORNIRE: acceptă numai meciul activ aflat în STARTING, cu generation și
+        -- token corecte. run_launcher va consuma cererea mai târziu, din meniu.
         sessionPayloadLog(payload)
         local validationReason = sessionValidationReason(payload)
         if validationReason ~= nil then
@@ -391,6 +448,8 @@ local function handleMessage(encoded)
             log("MATCH_START_RECEIVED match_id=\"" .. payload.matchId .. "\" generation=\"" .. tostring(payload.startGeneration) .. "\"")
         end
     elseif message.type == "MATCH_RESULT_FINAL" then
+        -- RESULT este final local: curăță pornirea și terminalul în așteptare, apoi
+        -- face datele mesajului disponibile pentru match_result.lua și ecranul de rezultat.
         if type(payload.matchId) ~= "string" or type(payload.results) ~= "table" then
             disconnect("INVALID_MATCH_RESULT")
             return false
@@ -404,7 +463,25 @@ local function handleMessage(encoded)
         finalizedMatchId = payload.matchId
         queueState = "RESULT"
         log("MATCH_RESULT_FINAL match_id=\"" .. payload.matchId .. "\"")
+    elseif message.type == "DEV_CONSOLE_STATE" then
+        -- Companion trimite acest mesaj numai în DEV. Extensia Production nu
+        -- expune API-ul nativ, deci un mesaj IPC injectat nu poate ocoli blocajul.
+        if type(payload.unlocked) ~= "boolean" then
+            disconnect("INVALID_DEV_CONSOLE_STATE")
+            return false
+        end
+        if type(Isaac1v1IPC) ~= "table" or type(Isaac1v1IPC.SetDevConsoleUnlocked) ~= "function" then
+            log("DEV_CONSOLE_STATE_REJECTED reason=\"NATIVE_DEV_API_UNAVAILABLE\"")
+            return true
+        end
+        local applied, errorMessage = Isaac1v1IPC.SetDevConsoleUnlocked(payload.unlocked)
+        if applied ~= true then
+            log("DEV_CONSOLE_STATE_REJECTED reason=" .. quote(errorMessage or "NATIVE_REJECTED"))
+            return true
+        end
+        log(payload.unlocked and "DEV_CONSOLE_UNLOCKED" or "DEV_CONSOLE_LOCKED")
     elseif message.type == "ERROR" then
+        -- Eroare online raportată de Companion. UI-ul transformă codul într-un mesaj clar.
         if type(payload.code) ~= "string" then
             disconnect("INVALID_ERROR_MESSAGE")
             return false
@@ -424,6 +501,8 @@ local function handleMessage(encoded)
 end
 
 function liveIPC.Initialize()
+    -- Este apelată o dată din main.lua. Verifică API-ul nativ REPENTOGON și suportul
+    -- JSON; întoarce true numai dacă modulul poate fi procesat prin Update.
     if type(Isaac1v1IPC) ~= "table"
         or type(Isaac1v1IPC.Connect) ~= "function"
         or type(Isaac1v1IPC.Disconnect) ~= "function"
@@ -458,6 +537,8 @@ function liveIPC.Initialize()
 end
 
 function liveIPC.Update()
+    -- Este apelată din callback-urile de update, randare și meniu. Menține conexiunea,
+    -- citește maximum opt mesaje, actualizează identitatea/modurile și detectează blocarea.
     if nativeAPI == nil then return end
     local current = now()
     if current == lastUpdateAt then return end
@@ -511,6 +592,7 @@ function liveIPC.Update()
 end
 
 function liveIPC.JoinQueue()
+    -- Trimite JOIN_QUEUE. Cere un Companion conectat și o identitate Steam validă.
     if phase ~= "CONNECTED" then return false, "COMPANION_NOT_RUNNING" end
     if not steamIdentityReady then
         onlineError = "STEAM_IDENTITY_NOT_FOUND"
@@ -528,6 +610,7 @@ function liveIPC.JoinQueue()
 end
 
 function liveIPC.LeaveQueue()
+    -- Trimite LEAVE_QUEUE înainte de STARTED și măsoară timpul pentru timeout-ul din UI.
     if phase ~= "CONNECTED" then return false, "COMPANION_NOT_RUNNING" end
     if queueState == "STARTED" then
         return false, "MATCH_ALREADY_STARTED"
@@ -544,6 +627,7 @@ function liveIPC.LeaveQueue()
 end
 
 function liveIPC.Ready()
+    -- Trimite MATCH_READY după ce jucătorul acceptă meciul găsit.
     if phase ~= "CONNECTED" then return false, "COMPANION_NOT_RUNNING" end
     local sent, errorMessage = sendEnvelope("MATCH_READY", {})
     if sent then queueState = "MATCH_FOUND"; log("MATCH_READY_SENT") end
@@ -551,6 +635,7 @@ function liveIPC.Ready()
 end
 
 function liveIPC.CancelMatch()
+    -- Trimite MATCH_CANCEL în MATCH_FOUND/STARTING și șterge cererea veche de pornire.
     if phase ~= "CONNECTED" then return false, "COMPANION_NOT_RUNNING" end
     if matchState ~= nil and type(matchState.matchId) == "string" then
         cancelledMatchIds[matchState.matchId] = true
@@ -571,6 +656,7 @@ function liveIPC.GetStartRequest()
 end
 
 function liveIPC.ConsumeStart(matchId, generation)
+    -- Predă MATCH_START o singură dată către run_launcher, blocând pornirile duplicate.
     if startRequest == nil or startRequest.matchId ~= matchId or startRequest.startGeneration ~= generation then return nil end
     local value = startRequest
     startRequest = nil
@@ -578,6 +664,7 @@ function liveIPC.ConsumeStart(matchId, generation)
 end
 
 function liveIPC.AcknowledgeStarted(matchId, generation)
+    -- Trimite MATCH_STARTED numai după ce MC_POST_GAME_STARTED confirmă run-ul local.
     if phase ~= "CONNECTED" then return false, "COMPANION_NOT_RUNNING" end
     return sendEnvelope("MATCH_STARTED", {matchId = matchId, startGeneration = generation})
 end
@@ -592,6 +679,7 @@ function liveIPC.SubmitScore(score, runTime, final)
 end
 
 function liveIPC.MaybeSubmitScore(score, runTime)
+    -- STARTED: trimite scorul doar când se schimbă și cel mult o dată pe secundă.
     local current = now()
     if current < nextScoreAt or queueState ~= "STARTED" or type(score) ~= "number" then return false end
     nextScoreAt = current + 1
@@ -603,6 +691,8 @@ function liveIPC.MaybeSubmitScore(score, runTime)
 end
 
 function liveIPC.SubmitTerminal(reason, score, runTime)
+    -- Cerere de final: trimite scorul final, apoi MATCH_TERMINAL_EVENT, de exemplu
+    -- DEATH sau RUN_COMPLETED. Păstrează ambele mesaje dacă trimiterea eșuează.
     if finalizedMatchId ~= nil then
         log("TERMINAL_EVENT_SUPPRESSED reason=\"RESULT_ALREADY_FINAL\" match_id=\"" .. tostring(finalizedMatchId) .. "\"")
         return false, "RESULT_ALREADY_FINAL"
@@ -621,6 +711,8 @@ function liveIPC.SubmitTerminal(reason, score, runTime)
 end
 
 function liveIPC.DisconnectMatch(matchId)
+    -- ABANDON/DECONECTARE: trimite MATCH_DISCONNECT când playerul iese din run-ul activ.
+    -- NOTE: transformarea acestui mesaj în ABANDON/LOSS se face în afara modulului Lua.
     if type(matchId) ~= "string" or matchId == "" then return false, "INVALID_MATCH_ID" end
     if phase ~= "CONNECTED" then return false, "COMPANION_NOT_RUNNING" end
     local sent, errorMessage = sendEnvelope("MATCH_DISCONNECT", {matchId = matchId})
@@ -641,15 +733,32 @@ function liveIPC.SetMatchResetHandler(handler)
 end
 
 function liveIPC.SetAvailableCharacterTypes(value)
+    -- Trimite PLAYER_AVAILABILITY când se schimbă lista personajelor deblocate.
     if type(value) ~= "table" or #value == 0 then return false, "INVALID_AVAILABLE_CHARACTERS" end
     availableCharacterTypes = value
     if phase == "CONNECTED" then
-        return sendEnvelope("PLAYER_AVAILABILITY", {availableCharacterTypes = availableCharacterTypes})
+        return sendEnvelope("PLAYER_AVAILABILITY", {availableCharacterTypes = availableCharacterTypes, availableDestinationIds = availableDestinationIds})
     end
     return true
 end
 
+function liveIPC.SetAvailableDestinationIds(value)
+    if type(value) ~= "table" or #value == 0 then return false, "INVALID_AVAILABLE_DESTINATIONS" end
+    availableDestinationIds = value
+    if phase == "CONNECTED" then
+        return sendEnvelope("PLAYER_AVAILABILITY", {availableCharacterTypes = availableCharacterTypes, availableDestinationIds = availableDestinationIds})
+    end
+    return true
+end
+
+function liveIPC.SetTerminalResetHandler(handler)
+    if handler ~= nil and type(handler) ~= "function" then return false end
+    terminalResetHandler = handler
+    return true
+end
+
 function liveIPC.SetCompetitiveModAllowlist(value)
+    -- ALLOWLIST/IPC: adaugă ID-urile și metadata oficială la cererile GET_ACTIVE_MODS.
     if type(value) ~= "table" then return false end
     competitiveModAllowlist = value
     competitiveModAllowlistIds = {}
@@ -671,6 +780,8 @@ function liveIPC.GetActiveMods()
 end
 
 function liveIPC.BeginCompetitiveResultTransition(matchId)
+    -- Marchează aplicarea unui RESULT valid, pentru ca callback-urile de exit/end
+    -- să nu mai trimită încă o dată evenimentul final.
     if finalizedMatchId == nil or tostring(finalizedMatchId) ~= tostring(matchId) then return false end
     if not competitiveResultTransition then
         competitiveResultTransition = true
@@ -688,15 +799,15 @@ function liveIPC.IsMatchFinalized()
 end
 
 function liveIPC.ClearResult()
+    -- Este apelată din meniul rezultatului înainte de play again/back și revine la IDLE.
+    local resultMatchId = finalizedMatchId or lifecycleMatchId
+    if type(resultMatchId) == "string" and resultMatchId ~= "" and phase == "CONNECTED" then
+        sendEnvelope("CLEAR_RESULT", {matchId = resultMatchId})
+    end
     matchState = nil
     matchControl = nil
     startRequest = nil
-    pendingTerminal = nil
-    lastScore = nil
-    nextScoreAt = 0
-    finalizedMatchId = nil
-    competitiveResultTransition = false
-    leaveRequestedAt = nil
+    resetTerminalPresentation()
     queueState = "IDLE"
     log("MATCH_RESULT_CLEARED")
 end
@@ -707,6 +818,7 @@ function liveIPC.GetLeaveElapsed()
 end
 
 function liveIPC.GetStatus()
+    -- Întoarce o copie pentru citire, folosită de meniu, rezultat și uneltele de debug.
     return {
         component = componentInstalled and "INSTALLED" or "NOT INSTALLED",
         companion = phase == "CONNECTED" and "CONNECTED" or "NOT RUNNING",

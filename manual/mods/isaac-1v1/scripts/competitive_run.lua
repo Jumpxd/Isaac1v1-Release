@@ -1,3 +1,5 @@
+-- Starea principală a meciului competitiv în Lua. Separă intenția de pornire,
+-- un run competitiv confirmat și un run normal de Isaac.
 local competitiveRun = {}
 
 local active = false
@@ -8,6 +10,8 @@ local trackedMatchId = nil
 local completedMatchIds = {}
 
 local function setNativeCompetitiveMode(enabled)
+    -- ANTI-CHEAT: spune extensiei native când trebuie aplicate restricțiile
+    -- competitive. Întoarce false dacă API-ul nativ refuză schimbarea.
     if type(Isaac1v1IPC) ~= "table" or type(Isaac1v1IPC.SetCompetitiveMode) ~= "function" then
         Isaac.DebugString('[Isaac1v1] COMPETITIVE_CONSOLE_NATIVE_UNAVAILABLE reason="API_MISSING"')
         return false
@@ -26,6 +30,7 @@ local function quote(value)
 end
 
 function competitiveRun.Reset()
+    -- Reset complet, folosit atunci când modulul Lua este încărcat.
     setNativeCompetitiveMode(false)
     active = false
     intentMatchId = nil
@@ -36,6 +41,8 @@ function competitiveRun.Reset()
 end
 
 function competitiveRun.BeginNewMatch(session, previousMatchId)
+    -- Șterge starea activă și intenția veche înainte de MATCH_START pentru alt meci.
+    -- ID-urile terminate rămân memorate ca să poată fi recunoscut un RESULT întârziat.
     if session == nil or type(session.matchId) ~= "string" or session.matchId == "" then return false end
     if trackedMatchId == session.matchId then return true end
     local previous = trackedMatchId or previousMatchId
@@ -50,6 +57,8 @@ function competitiveRun.BeginNewMatch(session, previousMatchId)
 end
 
 function competitiveRun.SetIntent(session)
+    -- Este apelată chiar înainte de StartNewGame controlat. Intenția singură nu
+    -- permite scor sau evenimente finale; run-ul trebuie mai întâi să pornească.
     if session == nil or type(session.matchId) ~= "string" then return false end
     if trackedMatchId ~= session.matchId then
         return competitiveRun.BeginNewMatch(session, trackedMatchId)
@@ -62,16 +71,20 @@ function competitiveRun.SetIntent(session)
 end
 
 function competitiveRun.ClearIntent()
+    -- Șterge intenția de pornire după anulare sau după o eroare la launch.
     setNativeCompetitiveMode(false)
     intentMatchId = nil
 end
 
 function competitiveRun.IsIntentFor(session)
+    -- Verifică dacă MC_POST_GAME_STARTED aparține ID-ului de meci așteptat.
     return not active and session ~= nil and session.active == true
         and intentMatchId ~= nil and session.matchId == intentMatchId
 end
 
 function competitiveRun.Activate(session)
+    -- STARTED: marchează meciul ca activ și pornește modul competitiv nativ.
+    -- Poate fi reapelată pentru același meci; întoarce false dacă sesiunea nu corespunde.
     if active and session ~= nil and session.matchId == activeMatchId then return true end
     if not competitiveRun.IsIntentFor(session) then return false end
     active = true
@@ -100,10 +113,12 @@ function competitiveRun.IsActive()
 end
 
 function competitiveRun.WasCompetitiveMatch(matchId)
+    -- Ajută match_result să accepte un rezultat venit după ce run-ul nu mai este activ.
     return matchId ~= nil and (lastCompetitiveMatchId == matchId or completedMatchIds[matchId] == true)
 end
 
 function competitiveRun.Deactivate(reason)
+    -- Iese din STARTED, memorează meciul ca terminat și dezactivează modul nativ.
     local matchId = activeMatchId or intentMatchId
     if active and matchId ~= nil then
         Isaac.DebugString("[Isaac1v1] COMPETITIVE_RUN_DEACTIVATED match_id=" .. quote(matchId)

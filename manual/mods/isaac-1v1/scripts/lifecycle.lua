@@ -1,3 +1,5 @@
+-- Callback-urile pentru CICLUL MECIULUI: activare, etaje, moarte finală, terminarea
+-- run-ului, revive și raportarea abandonului prin Exit Game.
 local lifecycle = {}
 
 local STATE_IDLE = "IDLE"
@@ -8,6 +10,7 @@ local state = STATE_IDLE
 local currentFloorKey = nil
 local deathLogged = false
 local endedLogged = false
+local targetCompletionLogged = false
 local terminalSuppressionLogged = false
 local trackedMatchId = nil
 local FINAL_DEATH_CALLBACK_PRIORITY = 1000000
@@ -64,6 +67,8 @@ local function logFloorEntered(gameState, matchSession)
 end
 
 local function submitTerminal(liveIPC, gameState, matchSession, reason, competitiveRun)
+    -- Cererea de final folosită de DEATH și RUN_COMPLETED. Rulează numai pentru
+    -- sesiunea activă exactă și trimite prin IPC punctajul și timpul curent.
     local session = matchSession ~= nil and matchSession.Get ~= nil and matchSession.Get() or nil
     if liveIPC == nil or liveIPC.SubmitTerminal == nil or matchSession == nil
         or not matchSession.IsActive() or competitiveRun == nil
@@ -85,6 +90,8 @@ local function submitTerminal(liveIPC, gameState, matchSession, reason, competit
 end
 
 local function logFinalDeath(gameState, matchSession, liveIPC, competitiveRun)
+    -- MOARTE: este apelată numai după ce Isaac a verificat toate posibilitățile de
+    -- revive. Trimite un singur eveniment final și așteaptă rezultatul serverului.
     if deathLogged then
         return false
     end
@@ -107,6 +114,8 @@ local function logFinalDeath(gameState, matchSession, liveIPC, competitiveRun)
 end
 
 local function logPlayerRevived(player, matchSession, competitiveRun)
+    -- REVIVE: scrie doar un log. Nu trimite un eveniment final și nu schimbă
+    -- starea competitivă a run-ului.
     local session = matchSession ~= nil and matchSession.Get ~= nil and matchSession.Get() or nil
     local competitive = competitiveRun ~= nil and competitiveRun.IsActiveFor ~= nil
         and competitiveRun.IsActiveFor(session)
@@ -142,7 +151,97 @@ local function activeSession(matchSession, competitiveRun)
         and competitiveRun.IsActiveFor(session)
 end
 
+-- Acestea sunt numai formele de progression/destination care pot decide un
+-- outcome. Boss-ii obișnuiți nu apar aici și nu pot produce WRONG_DESTINATION.
+local PROGRESSION_BOSS_MATCHERS = {
+    MOM = function(npc) return npc.Type == EntityType.ENTITY_MOM and npc.Variant == 10 end,
+    MOMS_HEART = function(npc) return npc.Type == EntityType.ENTITY_MOMS_HEART
+        and (npc.Variant == 0 or npc.Variant == 1) end, -- Mom's Heart / It Lives
+    SATAN = function(npc) return npc.Type == EntityType.ENTITY_SATAN
+        and npc.Variant == 10 and npc.Child == nil end, -- final Satan leg
+    ISAAC = function(npc) return npc.Type == EntityType.ENTITY_ISAAC and npc.Variant == 0 end,
+    THE_LAMB = function(npc) return npc.Type == EntityType.ENTITY_THE_LAMB and npc.Variant == 0 end,
+    BLUE_BABY = function(npc) return npc.Type == EntityType.ENTITY_ISAAC and npc.Variant == 1 end,
+    MEGA_SATAN = function(npc) return npc.Type == EntityType.ENTITY_MEGA_SATAN_2
+        and npc.Variant == 0 end, -- phase 2 only
+    MOTHER = function(npc) return npc.Type == EntityType.ENTITY_MOTHER and npc.Variant == 10 end,
+    DOGMA = function(npc) return npc.Type == EntityType.ENTITY_DOGMA and npc.Variant == 2 end,
+    THE_BEAST = function(npc) return npc.Type == EntityType.ENTITY_BEAST and npc.Variant == 0 end,
+}
+
+-- Central outcome policy. The allowed set contains only bosses that may be
+-- killed before the target on the real vanilla route.
+local TARGET_BOSS_OUTCOMES = {
+    MOM = { completion = "MOM", allowed = {} },
+    MOMS_HEART = { completion = "MOMS_HEART", allowed = { MOM = true } },
+    SATAN = { completion = "SATAN", allowed = { MOM = true, MOMS_HEART = true } },
+    ISAAC = { completion = "ISAAC", allowed = { MOM = true, MOMS_HEART = true } },
+    THE_LAMB = {
+        completion = "THE_LAMB",
+        allowed = { MOM = true, MOMS_HEART = true, SATAN = true },
+    },
+    BLUE_BABY = {
+        completion = "BLUE_BABY",
+        allowed = { MOM = true, MOMS_HEART = true, ISAAC = true },
+    },
+    MEGA_SATAN = {
+        completion = "MEGA_SATAN",
+        allowed = { MOM = true, MOMS_HEART = true, SATAN = true, ISAAC = true },
+    },
+    MOTHER = { completion = "MOTHER", allowed = { MOM = true } },
+    THE_BEAST = { completion = "THE_BEAST", allowed = { MOM = true, DOGMA = true } },
+}
+
+lifecycle.PROGRESSION_BOSS_MATCHERS = PROGRESSION_BOSS_MATCHERS
+lifecycle.TARGET_BOSS_OUTCOMES = TARGET_BOSS_OUTCOMES
+
+local function classifyProgressionBoss(npc)
+    for bossId, matches in pairs(PROGRESSION_BOSS_MATCHERS) do
+        if matches(npc) == true then return bossId end
+    end
+    return nil
+end
+
+local function resolveBossOutcome(gameState, matchSession, liveIPC, competitiveRun, npc)
+    if targetCompletionLogged or state ~= STATE_IN_RUN then return false end
+    local session, competitive = activeSession(matchSession, competitiveRun)
+    if not competitive or session == nil or type(session.targetDestinationId) ~= "string" then return false end
+
+    local defeatedBossId = classifyProgressionBoss(npc)
+    if defeatedBossId == nil then return false end
+    local profile = TARGET_BOSS_OUTCOMES[session.targetDestinationId]
+    if profile == nil then return false end
+
+    if defeatedBossId == profile.completion then
+        targetCompletionLogged = true
+        Isaac.DebugString("[Isaac1v1] COMPETITIVE_TARGET_DEFEATED match_id=" .. quote(session.matchId)
+            .. " destination=" .. quote(session.targetDestinationId))
+        submitTerminal(liveIPC, gameState, matchSession, "RUN_COMPLETED", competitiveRun)
+        logRunEnded(gameState, "TARGET_DEFEATED", matchSession)
+        competitiveRun.Deactivate("RUN_COMPLETED")
+        return true
+    end
+
+    if profile.allowed[defeatedBossId] == true then
+        Isaac.DebugString("[Isaac1v1] COMPETITIVE_PROGRESSION_BOSS match_id=" .. quote(session.matchId)
+            .. " target=" .. quote(session.targetDestinationId)
+            .. " defeated=" .. quote(defeatedBossId))
+        return false
+    end
+
+    targetCompletionLogged = true
+    Isaac.DebugString("[Isaac1v1] COMPETITIVE_WRONG_DESTINATION match_id=" .. quote(session.matchId)
+        .. " target=" .. quote(session.targetDestinationId)
+        .. " defeated=" .. quote(defeatedBossId))
+    submitTerminal(liveIPC, gameState, matchSession, "WRONG_DESTINATION", competitiveRun)
+    logRunEnded(gameState, "WRONG_DESTINATION", matchSession)
+    competitiveRun.Deactivate("WRONG_DESTINATION")
+    return true
+end
+
 function lifecycle.BeginNewMatch(matchId)
+    -- Șterge stările lifecycle ale meciului anterior, inclusiv protecția împotriva
+    -- duplicatelor. Dacă acest ID a fost deja resetat, nu repetă operația.
     if type(matchId) ~= "string" or matchId == "" then return false end
     if trackedMatchId == matchId then return true end
     trackedMatchId = matchId
@@ -150,11 +249,25 @@ function lifecycle.BeginNewMatch(matchId)
     currentFloorKey = nil
     deathLogged = false
     endedLogged = false
+    targetCompletionLogged = false
+    terminalSuppressionLogged = false
+    return true
+end
+
+function lifecycle.ResetTerminal()
+    trackedMatchId = nil
+    state = STATE_IDLE
+    currentFloorKey = nil
+    deathLogged = false
+    endedLogged = false
+    targetCompletionLogged = false
     terminalSuppressionLogged = false
     return true
 end
 
 local function startRun(gameState, isContinued, matchValidation, matchSession, competitiveRun)
+    -- Funcția apelată de MC_POST_GAME_STARTED. Un Continue sau run normal curăță datele
+    -- competitive vechi; numai intenția care corespunde sesiunii poate fi activată.
     if state == STATE_IN_RUN then
         local existingSession = matchSession ~= nil and matchSession.Get ~= nil and matchSession.Get() or nil
         if competitiveRun ~= nil and competitiveRun.IsActiveFor ~= nil
@@ -188,6 +301,7 @@ local function startRun(gameState, isContinued, matchValidation, matchSession, c
     currentFloorKey = nil
     deathLogged = false
     endedLogged = false
+    targetCompletionLogged = false
     terminalSuppressionLogged = false
 
     local matchResult = {valid = false}
@@ -235,22 +349,33 @@ local function startRun(gameState, isContinued, matchValidation, matchSession, c
 end
 
 function lifecycle.Register(mod, gameState, matchValidation, matchSession, liveIPC, competitiveRun, matchBridge, matchResult)
+    -- Înregistrează toate callback-urile ciclului de joc. matchBridge rămâne în
+    -- parametri pentru compatibilitate, dar sesiunea live vine din matchSession.
     mod:AddCallback(ModCallbacks.MC_POST_GAME_STARTED, function(_, isContinued)
+        -- Rulează ori de câte ori Isaac pornește sau continuă un run, nu doar în 1v1.
         startRun(gameState, isContinued, matchValidation, matchSession, competitiveRun)
     end)
 
     mod:AddCallback(ModCallbacks.MC_POST_NEW_LEVEL, function()
+        -- STARTED: înregistrează intrarea pe un etaj pentru sesiunea competitivă activă.
         local _, competitive = activeSession(matchSession, competitiveRun)
         if state == STATE_IN_RUN and competitive then
             logFloorEntered(gameState, matchSession)
         end
     end)
 
-    -- This callback runs only after vanilla revive checks. Register it very
-    -- late so mod-provided revives using the same REPENTOGON callback can run
-    -- first and short-circuit the remaining death callbacks.
+    -- REPENTOGON/Isaac emite acest callback când NPC-ul a murit efectiv.
+    mod:AddCallback(ModCallbacks.MC_POST_NPC_DEATH, function(_, npc)
+        resolveBossOutcome(gameState, matchSession, liveIPC, competitiveRun, npc)
+    end)
+
+    -- Acest callback rulează după verificările vanilla de revive. Este înregistrat
+    -- foarte târziu, astfel încât revive-urile altor moduri care folosesc același
+    -- callback REPENTOGON să poată rula primele și să oprească moartea finală.
     mod:AddPriorityCallback(ModCallbacks.MC_TRIGGER_PLAYER_DEATH_POST_CHECK_REVIVES,
         FINAL_DEATH_CALLBACK_PRIORITY, function(_, player)
+            -- MOARTE/REVIVE: acest hook REPENTOGON rulează după rezolvarea revive-ului.
+            -- Astfel, un revive valid nu este raportat greșit ca pierdere.
             local _, competitive = activeSession(matchSession, competitiveRun)
             if state ~= STATE_IN_RUN or not competitive then return end
             if logFinalDeath(gameState, matchSession, liveIPC, competitiveRun) then
@@ -264,10 +389,12 @@ function lifecycle.Register(mod, gameState, matchValidation, matchSession, liveI
         end)
 
     mod:AddCallback(ModCallbacks.MC_POST_PLAYER_REVIVE, function(_, player)
+        -- Confirmă un revive reușit fără să termine sau să repornească meciul.
         logPlayerRevived(player, matchSession, competitiveRun)
     end)
 
     mod:AddCallback(ModCallbacks.MC_POST_GAME_END, function(_, isGameOver)
+        -- RESULT: raportează moartea finală ca rezervă sau RUN_COMPLETED la final normal.
         local _, competitive = activeSession(matchSession, competitiveRun)
         if state ~= STATE_IN_RUN or not competitive then return end
         if liveIPC ~= nil and liveIPC.IsCompetitiveResultTransition ~= nil
@@ -290,13 +417,17 @@ function lifecycle.Register(mod, gameState, matchValidation, matchSession, liveI
             logRunEnded(gameState, "GAME_OVER", matchSession)
             competitiveRun.Deactivate("DEATH")
         else
-            submitTerminal(liveIPC, gameState, matchSession, "RUN_COMPLETED", competitiveRun)
-            logRunEnded(gameState, "ENDING", matchSession)
-            competitiveRun.Deactivate("RUN_COMPLETED")
+            -- A vanilla ending is not proof that the selected target died. The
+            -- target callback above is the sole completion authority.
+            submitTerminal(liveIPC, gameState, matchSession, "WRONG_DESTINATION", competitiveRun)
+            logRunEnded(gameState, "WRONG_DESTINATION", matchSession)
+            competitiveRun.Deactivate("WRONG_DESTINATION")
         end
     end)
 
     mod:AddCallback(ModCallbacks.MC_PRE_GAME_EXIT, function(_, shouldSave)
+        -- ABANDON/DECONECTARE: Exit Game în STARTED trimite MATCH_DISCONNECT înainte
+        -- de dezactivarea locală. Sistemul extern decide apoi rezultatul LOSS.
         local session, competitive = activeSession(matchSession, competitiveRun)
         if state == STATE_IN_RUN and competitive then
             Isaac.DebugString("[Isaac1v1] COMPETITIVE_EXIT_DETECTED match_id=\""

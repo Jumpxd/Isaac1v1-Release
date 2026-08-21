@@ -1,3 +1,5 @@
+-- HUD/UI pentru meniul Isaac 1v1 deschis cu F8. Afișează stările de matchmaking
+-- și rezultat și transformă input-ul jucătorului în cereri liveIPC.
 local menuPrototype = {}
 
 local STATE_MAIN = "MAIN_1V1"
@@ -23,9 +25,9 @@ local pendingConflictName = nil
 local previousMenu = nil
 local previousInputMask = nil
 local pollingOwnedInput = false
--- MC_MENU_INPUT_ACTION can be invoked by the menu before our render polling
--- observes the trigger.  Remember a directly handled action so that the same
--- trigger cannot subsequently select READY in the same frame.
+-- MC_MENU_INPUT_ACTION poate fi apelat înainte ca verificarea din randare să vadă
+-- input-ul. Memorăm acțiunea deja procesată ca să nu selecteze READY încă o dată
+-- în același frame.
 local callbackActionConsumed = nil
 local hostLayerRecords = {}
 local hostLayersCaptured = false
@@ -35,8 +37,8 @@ local resultSnapshot = nil
 local resultMappingLoggedMatchId = nil
 
 local function resetOpeningState()
-    -- Opening from GAME is always a new root-menu session. Do not carry a
-    -- transient command state across a close/reopen cycle.
+    -- Șterge starea temporară a interfeței când meniul custom este deschis sau închis.
+    -- Deschiderea din GAME începe mereu o sesiune nouă de meniu, fără comenzi vechi.
     state = STATE_MAIN
     selection = 1
     localReady = false
@@ -58,8 +60,8 @@ local avatarSprite = Sprite()
 local avatarPathLoaded = nil
 local avatarLoaded = false
 
--- Alpha exposes only public matchmaking. Unfinished lobby backend support is
--- dormant and has no production menu entry point.
+-- Versiunea Alpha arată numai matchmaking-ul public. Suportul neterminat pentru
+-- lobby este inactiv și nu poate fi accesat din meniul Production.
 local mainOptions = {"FIND MATCH", "BACK"}
 local searchingOptions = {"BACK - CANCEL"}
 local matchFoundOptions = {"READY", "BACK - CANCEL"}
@@ -69,9 +71,9 @@ local leaveFailedOptions = {"BACK"}
 local pendingOptions = {"BACK"}
 local resultOptions = {"PLAY AGAIN", "BACK TO 1V1", "MAIN MENU"}
 
--- REPENTOGON accepts custom nonzero menu IDs. A dedicated ID avoids inheriting
--- any vanilla foreground while preserving MC_MAIN_MENU_RENDER and menu input.
--- ID 0 is intentionally avoided because REPENTOGON reserves it internally.
+-- REPENTOGON acceptă ID-uri custom diferite de zero. Un ID separat împiedică
+-- afișarea elementelor vanilla, dar păstrează randarea și comenzile meniului.
+-- ID-ul 0 nu este folosit deoarece REPENTOGON îl rezervă intern.
 local HOST_MENU = MainMenuType and 31031 or nil
 
 local function getActiveMenu()
@@ -114,6 +116,8 @@ local function logSelection(option)
 end
 
 local function captureAndHideSprite(sprite, sourceName)
+    -- UI: memorează vizibilitatea imaginilor vanilla înainte să le ascundă,
+    -- pentru ca exitContext să poată restaura meniul original.
     if sprite == nil or type(sprite.GetAllLayers) ~= "function" then return false end
 
     local layersOk, layers = pcall(sprite.GetAllLayers, sprite)
@@ -200,11 +204,11 @@ local function captureHostLayers()
 
     local captured = false
     local getters = {
-        -- REPENTOGON's documented Bestiary render components.
+        -- Componentele de randare Bestiary documentate de REPENTOGON.
         "GetBestiaryMenuSprite",
         "GetEnemySprite",
         "GetDeathScreenSprite",
-        -- Keep compatibility with builds exposing split decoration sprites.
+        -- Păstrează compatibilitatea cu versiunile care au imagini decorative separate.
         "GetBestiarySprite",
         "GetHeaderSprite",
         "GetTabsSprite",
@@ -223,9 +227,9 @@ local function captureHostLayers()
         end
     end
 
-    -- REPENTOGON revisions expose additional Bestiary tabs/page controls under
-    -- different names. Discover only visual-named fields and capture every
-    -- layer from those returned sprites; never hide the global menu backdrop.
+    -- Unele versiuni REPENTOGON expun tab-uri și controale Bestiary cu alte nume.
+    -- Sunt căutate numai câmpurile care par vizuale și sunt ascunse straturile lor,
+    -- fără să fie ascuns fundalul global al meniului.
     local discoveredOk, discovered = pcall(function()
         return captureHostValue(BestiaryMenu, 0)
     end)
@@ -309,6 +313,8 @@ local function getCustomInputMask()
 end
 
 local function enterContext()
+    -- Este apelată prin F8/Open din meniul vanilla GAME. Preia ID-ul de meniu și
+    -- input-ul REPENTOGON, apoi deschide starea MAIN_1V1.
     if active or HOST_MENU == nil then return false end
 
     local currentMenu = getActiveMenu()
@@ -355,6 +361,7 @@ local function enterContext()
 end
 
 local function exitContext()
+    -- Restaurează meniul anterior, filtrul de comenzi și straturile vizuale ascunse.
     if not active then return end
 
     local targetMenu = previousMenu or MainMenuType.GAME
@@ -374,6 +381,7 @@ local function exitContext()
 end
 
 local function clearResult()
+    -- RESULT: șterge atât copia locală afișată, cât și starea finală din liveIPC.
     resultSnapshot = nil
     if liveIPC ~= nil and type(liveIPC.ClearResult) == "function" then
         pcall(liveIPC.ClearResult)
@@ -381,6 +389,8 @@ local function clearResult()
 end
 
 local function beginFindMatch()
+    -- CICLUL MECIULUI: intrarea în coadă. Verifică mai întâi allowlist-ul, apoi
+    -- trimite JOIN_QUEUE și trece UI-ul în SEARCHING dacă cererea reușește.
     if modCompatibility ~= nil and modCompatibility.GetCompetitiveModCompatibility ~= nil then
         local compatibilityOk, result = pcall(modCompatibility.GetCompetitiveModCompatibility)
         if compatibilityOk and result ~= nil and result.compatible == false then
@@ -412,6 +422,7 @@ end
 local requestCancel
 
 local function back()
+    -- Acțiunea Back depinde de context: închide meniul sau cere anularea cozii/meciului.
     Isaac.DebugString("[Isaac1v1] MENU_1V1_BACK")
     if state == STATE_MAIN then
         exitContext()
@@ -429,6 +440,8 @@ local function back()
 end
 
 local function activateSelection()
+    -- Execută opțiunea selectată. READY trimite MATCH_READY; opțiunile rezultatului
+    -- curăță starea finală înainte de un meci nou sau de ieșirea din meniul 1v1.
     local options = currentOptions()
     if options == nil then return end
     local option = options[selection]
@@ -509,6 +522,8 @@ local function activateSelection()
 end
 
 requestCancel = function()
+    -- IPC: SEARCHING folosește LEAVE_QUEUE, iar MATCH_FOUND/STARTING folosește
+    -- MATCH_CANCEL. UI-ul așteaptă răspunsul IDLE înainte să revină la MAIN_1V1.
     if liveIPC == nil then
         pendingError = "IPC_COMPONENT_NOT_AVAILABLE"
         state = STATE_ERROR
@@ -574,6 +589,8 @@ local function isActionTriggeredAll(action)
 end
 
 local function processOwnedInput()
+    -- Verifică toate controllerele locale și nu procesează de două ori o acțiune
+    -- deja preluată de MC_MENU_INPUT_ACTION în același frame.
     if callbackActionConsumed ~= nil then
         callbackActionConsumed = nil
         return
@@ -627,13 +644,13 @@ end
 local function playerPersona(player)
     local name = player ~= nil and player.displayName or nil
     if type(name) ~= "string" or name == "" then return "PLAYER" end
-    -- Keep the paper menu line within its safe area; never fall back to a
-    -- SteamID in this normal UI path.
+    -- Păstrează numele în zona sigură a meniului și nu afișează SteamID-ul ca rezervă.
     if #name > 24 then return string.sub(name, 1, 23) .. "…" end
     return name
 end
 
 local function renderAvatar(player, x, y)
+    -- HUD/UI: afișează numai avataruri ale căror căi au fost aprobate de extensia nativă.
     local path = player ~= nil and player.avatar or nil
     if type(path) ~= "string" or path == "" then return end
     if type(Isaac1v1IPC) ~= "table" or type(Isaac1v1IPC.IsSteamAvatarPath) ~= "function" then return end
@@ -660,6 +677,8 @@ local function renderAvatar(player, x, y)
 end
 
 local function renderDedicatedScreen()
+    -- Actualizează și desenează starea principală a UI-ului. liveIPC.GetStatus decide
+    -- SEARCHING/MATCH_FOUND/STARTING/RESULT, iar o eroare de launch oprește STARTING.
     local inputMask = getCustomInputMask()
     if inputMask ~= nil then
         pcall(MenuManager.SetInputMask, inputMask)
@@ -838,6 +857,8 @@ local function renderDedicatedScreen()
             renderText("PLAYER: " .. playerPersona(ipcStatus.player), 184, 72, color)
         end
     elseif state == STATE_RESULT then
+        -- RESULT: compară câștigătorul și cauza finală cu playerul Steam local,
+        -- apoi afișează VICTORY, DEFEAT sau DRAW.
         local result = resultSnapshot or ipcStatus.result or {}
         local playerId = ipcStatus.player and ipcStatus.player.playerId
         local ownScore, opponentScore = "UNKNOWN", "UNKNOWN"
@@ -851,7 +872,7 @@ local function renderDedicatedScreen()
             end
         end
         local computedResult
-        if result.terminalReason == "DEATH" then
+        if result.terminalReason == "DEATH" or result.terminalReason == "WRONG_DESTINATION" then
             computedResult = tostring(result.terminalPlayerId) == tostring(playerId) and "LOSS" or "WIN"
         elseif result.isDraw == true then
             computedResult = "DRAW"
@@ -875,6 +896,8 @@ local function renderDedicatedScreen()
         local reason
         if result.terminalReason == "DEATH" then
             reason = result.terminalPlayerId == playerId and "YOU DIED" or "OPPONENT DIED"
+        elseif result.terminalReason == "WRONG_DESTINATION" then
+            reason = result.terminalPlayerId == playerId and "WRONG DESTINATION" or "OPPONENT CHOSE WRONG DESTINATION"
         elseif result.terminalReason == "ABANDON" then
             reason = result.terminalPlayerId == playerId and "YOU ABANDONED" or "OPPONENT ABANDONED"
         elseif result.terminalReason == "ABANDON_BOTH" then
@@ -882,8 +905,8 @@ local function renderDedicatedScreen()
         else
             reason = "RUN COMPLETED - SCORE"
         end
-        -- Results own the full paper: a single title, fixed vertical bands,
-        -- and navigation above the vanilla bottom-hint area.
+        -- Rezultatul folosește toată foaia: un singur titlu, zone verticale fixe
+        -- și navigare deasupra indicațiilor vanilla de jos.
         renderCenteredText("ISAAC 1V1", 240, 40, color)
         renderCenteredText(title, 240, 58, selectedColor)
         renderCenteredText("YOUR SCORE", 240, 78, color)
@@ -904,11 +927,15 @@ local function renderDedicatedScreen()
 end
 
 function menuPrototype.Open()
+    -- Funcția publică folosită de F8; întoarce dacă deschiderea meniului a reușit.
     return enterContext()
 end
 
 function menuPrototype.ShowResult(result)
+    -- Este apelată de match_result după acceptarea MATCH_RESULT_FINAL. Păstrează o
+    -- copie pentru ca rezultatul să rămână disponibil după ieșirea din run.
     if type(result) ~= "table" or type(result.matchId) ~= "string" then return false end
+    resetOpeningState()
     resultSnapshot = result
     if active then
         state = STATE_RESULT
@@ -919,17 +946,24 @@ function menuPrototype.ShowResult(result)
 end
 
 function menuPrototype.BeginNewMatch(matchId)
+    -- Un ID nou invalidează toate prompturile, selecțiile și rezultatele vechi.
     if type(matchId) ~= "string" or matchId == "" then return false end
     resultSnapshot = nil
     resultMappingLoggedMatchId = nil
-    if state == STATE_RESULT then
-        state = STATE_MAIN
-        selection = 1
-    end
+    resetOpeningState()
+    return true
+end
+
+function menuPrototype.ResetTerminal()
+    resultSnapshot = nil
+    resultMappingLoggedMatchId = nil
+    resetOpeningState()
     return true
 end
 
 local function renderPrototype()
+    -- MC_MAIN_MENU_RENDER: afișează indicația F8, deschide automat un rezultat în
+    -- așteptare, procesează input-ul și desenează ecranul 1v1.
     local currentMenu = getActiveMenu()
 
     if not active then
@@ -974,13 +1008,14 @@ local function isOwnedAction(action)
 end
 
 local function onMenuInput(_, hook, action)
+    -- MC_MENU_INPUT_ACTION: controlează navigarea cât timp meniul custom este activ
+    -- și împiedică meniul vanilla să folosească același input.
     if not active or not isOwnedAction(action) then return nil end
     if pollingOwnedInput then return nil end
 
     if hook == InputHook.IS_ACTION_TRIGGERED then
-        -- Handle back/escape at the menu-input boundary instead of relying on
-        -- the selected option.  This is also the path REPENTOGON uses for a
-        -- controller cancel action in custom menus.
+        -- Procesează Back/Escape direct la intrarea în meniu, fără să depindă de
+        -- opțiunea selectată. REPENTOGON folosește aceeași cale pentru Cancel pe controller.
         if callbackActionConsumed == action then return false end
         callbackActionConsumed = action
         handleAction(action)
@@ -993,6 +1028,8 @@ local function onMenuInput(_, hook, action)
 end
 
 function menuPrototype.Register(mod, bridge, ipc, compatibility, launcher)
+    -- Încarcă fișierele UI, păstrează legăturile către module și înregistrează cele
+    -- două callback-uri. Bridge-ul local vechi este verificat, dar matchmaking-ul folosește IPC.
     localBridge = bridge
     liveIPC = ipc
     modCompatibility = compatibility
