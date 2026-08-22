@@ -10,36 +10,12 @@ parity, and native core tests, but the published package has not been live-teste
 in two running Isaac instances by the release automation. Expect rough edges and
 report reproducible issues with the standard Isaac or REPENTOGON log attached.
 
-## What changed in alpha.4
-
-- Fixed REPENTOGON version detection when the game runs from REPENTOGON's
-  private `Repentogon\isaac-ng.exe` copy.
-- Fixed Isaac root and `mods` directory resolution for the same runtime layout.
-- Added explicit Windows download-unblock guidance for the unsigned alpha DLL.
-
-These changes are covered by automated native and Lua tests. Two-account live
-validation in Isaac remains to be performed separately.
-
 ## Requirements
 
 - Windows and The Binding of Isaac: Repentance+ 1.9.7.12
 - REPENTOGON v1.1.2e or newer
 - Steam running online on both computers
 - The same Isaac 1v1 release installed by both players
-
-No companion application is required. Do not install `zhlIsaac1v1IPC.dll` for
-this release. Matchmaking does not use a local IPC service or a web backend. The
-production service receives only completed-match statistics for profiles and
-match history; service availability does not block the local match result.
-
-## Native lifecycle safety
-
-The P2P DLL starts inactive even though REPENTOGON loads it at game startup. It
-becomes active only after the matching `isaac-1v1-p2p` Lua mod confirms its
-lifecycle. If the mod is disabled, the DLL cannot start matchmaking, messaging,
-heartbeats, stats submission, save protection, or console blocking. Unloading
-the mod cancels any search, leaves the lobby/session, stops stats work, clears
-competitive state, and restores vanilla save and console behavior.
 
 ## Install
 
