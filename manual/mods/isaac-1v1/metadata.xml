@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<!-- Manifestul modului: indică jocului numele folderului și versiunea încărcată. -->
-<metadata>
-    <name>Isaac 1v1</name>
-    <directory>isaac-1v1</directory>
-    <description>Competitive 1v1 runs with shared seeds, characters, and target bosses.</description>
-    <version>0.1.1-alpha.1</version>
-    <visibility>0</visibility>
-</metadata>
