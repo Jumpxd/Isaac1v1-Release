@@ -3,6 +3,6 @@
     <directory>isaac-1v1-p2p</directory>
     <id>isaac-1v1-p2p</id>
     <description>Competitive Isaac 1v1 matchmaking over Steam P2P.</description>
-    <version>0.2.0-alpha.1</version>
+    <version>0.2.0-alpha.2</version>
     <visibility>Public</visibility>
 </metadata>

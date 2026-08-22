@@ -84,6 +84,8 @@ local function setQueue(nextState)
 end
 
 local function apiAvailable()
+    if type(Isaac1v1P2P) ~= "table"
+        or type(Isaac1v1P2P.SetIsaac1v1Active) ~= "function" then return false end
     local names = {
         "SteamP2PGetIdentity", "SteamP2PStartMatchmaking", "SteamP2PCancelMatchmaking",
         "SteamP2PGetState", "SteamP2PSend", "SteamP2PPollEvents", "SteamP2PLeave",

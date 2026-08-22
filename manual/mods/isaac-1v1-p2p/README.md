@@ -12,3 +12,7 @@ and gameplay synchronization remain peer-to-peer.
 Press F8 from the main menu, choose **Find Match**, and wait for the synchronized
 match configuration. The match starts automatically after both peers commit the
 same character, seed, and destination.
+
+The native runtime starts inactive and is enabled only by this mod. Disabling or
+unloading the mod closes any Isaac 1v1 lobby/session and restores vanilla save
+and console behavior.

@@ -44,6 +44,32 @@ local competitiveRun = loadScript("scripts/competitive_run.lua")
 local competitiveConsoleGuard = loadScript("scripts/competitive_console_guard.lua")
 local modCompatibility = loadScript("scripts/mod_compatibility.lua")
 
+local nativeLifecycleActive = false
+if type(Isaac1v1P2P) == "table"
+    and type(Isaac1v1P2P.SetIsaac1v1Active) == "function" then
+    local callOk, activated = pcall(Isaac1v1P2P.SetIsaac1v1Active, true)
+    nativeLifecycleActive = callOk and activated == true
+end
+if not nativeLifecycleActive then
+    Isaac.DebugString("[Isaac1v1P2P] ERROR: native lifecycle activation failed")
+end
+
+local function deactivateNativeRuntime()
+    if competitiveRun ~= nil and competitiveRun.Deactivate ~= nil then
+        pcall(competitiveRun.Deactivate, "MOD_UNLOAD")
+    end
+    if transport ~= nil and transport.Shutdown ~= nil then pcall(transport.Shutdown) end
+    if type(Isaac1v1P2P) == "table"
+        and type(Isaac1v1P2P.SetIsaac1v1Active) == "function" then
+        pcall(Isaac1v1P2P.SetIsaac1v1Active, false)
+    end
+    nativeLifecycleActive = false
+end
+
+if ModCallbacks.MC_PRE_MOD_UNLOAD ~= nil then
+    mod:AddCallback(ModCallbacks.MC_PRE_MOD_UNLOAD, deactivateNativeRuntime)
+end
+
 if modCompatibility ~= nil and transport ~= nil then
     -- ALLOWLIST: transportul oferă lista modurilor active, iar Lua trimite
     -- lista oficială de moduri permise folosită la verificare.
@@ -121,7 +147,7 @@ if transport ~= nil and transport.SetMatchResetHandler ~= nil then
 end
 
 
-if transport ~= nil and transport.Initialize ~= nil then
+if nativeLifecycleActive and transport ~= nil and transport.Initialize ~= nil then
     local ok, available = pcall(transport.Initialize)
     if not ok or available ~= true then
         Isaac.DebugString("[Isaac1v1P2P] P2P transport initialization failed")
@@ -161,14 +187,6 @@ if transport ~= nil and transport.Initialize ~= nil then
                 pcall(destinationAvailability.ReportIfChanged, transport)
             end)
         end
-        end
-        if ModCallbacks.MC_PRE_MOD_UNLOAD ~= nil then
-            -- CURĂȚARE: dezactivează modul competitiv nativ și închide
-            -- transportul atunci când mod-ul este oprit.
-            mod:AddCallback(ModCallbacks.MC_PRE_MOD_UNLOAD, function()
-                if competitiveRun ~= nil and competitiveRun.Deactivate ~= nil then pcall(competitiveRun.Deactivate, "MOD_UNLOAD") end
-                pcall(transport.Shutdown)
-            end)
         end
     end
 else

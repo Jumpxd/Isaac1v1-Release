@@ -1,13 +1,13 @@
 {
   "schemaVersion": 1,
   "product": "Isaac 1v1",
-  "version": "0.2.0-alpha.1",
+  "version": "0.2.0-alpha.2",
   "prerelease": true,
   "architecture": "win32-x86",
   "source": {
     "repository": "https://github.com/Jumpxd/Isaac1v1",
-    "branch": "codex/p2p-public-release",
-    "commit": "ead3d5db4d6a88d38096d4ba3e35c1c8eb52c7a4"
+    "branch": "codex/dll-module-lifecycle",
+    "commit": "ffa8a2d82fd831063598a56d421ce1b796c4aab1"
   },
   "requirements": {
     "game": "The Binding of Isaac: Repentance+ 1.9.7.12",
@@ -17,6 +17,7 @@
   "runtime": {
     "matchmaking": "Steam lobby and peer-to-peer",
     "stats": "production stats-only service",
+    "moduleLifecycle": "inactive until confirmed by isaac-1v1-p2p Lua",
     "dedicatedLog": false,
     "companionRequired": false,
     "localhostIpcRequired": false
@@ -24,8 +25,8 @@
   "files": {
     "dll": {
       "path": "Repentogon/zhlIsaac1v1SteamP2P.dll",
-      "size": 157184,
-      "sha256": "0e9f47916bf60254afef226ac249c203464a42796ea2c7e939fa4b2a34f4469a"
+      "size": 161280,
+      "sha256": "29e6993b144291b1a6a13eeac960a1a62e9d51b02121c43bfdef44c9ee95375f"
     },
     "mod": {
       "path": "mods/isaac-1v1-p2p",

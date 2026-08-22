@@ -1,4 +1,4 @@
-# Isaac 1v1 v0.2.0-alpha.1
+# Isaac 1v1 v0.2.0-alpha.2
 
 Isaac 1v1 is an experimental competitive mod for **The Binding of Isaac:
 Repentance+**. Matchmaking and match synchronization use Steam lobbies and
@@ -22,10 +22,19 @@ this release. Matchmaking does not use a local IPC service or a web backend. The
 production service receives only completed-match statistics for profiles and
 match history; service availability does not block the local match result.
 
+## Native lifecycle safety
+
+The P2P DLL starts inactive even though REPENTOGON loads it at game startup. It
+becomes active only after the matching `isaac-1v1-p2p` Lua mod confirms its
+lifecycle. If the mod is disabled, the DLL cannot start matchmaking, messaging,
+heartbeats, stats submission, save protection, or console blocking. Unloading
+the mod cancels any search, leaves the lobby/session, stops stats work, clears
+competitive state, and restores vanilla save and console behavior.
+
 ## Install
 
 1. Close Isaac and the REPENTOGON launcher.
-2. Download and extract `Isaac1v1-v0.2.0-alpha.1.zip`.
+2. Download and extract `Isaac1v1-v0.2.0-alpha.2.zip`.
 3. Copy `mods\isaac-1v1-p2p` into Isaac's `mods` directory.
 4. Copy `Repentogon\zhlIsaac1v1SteamP2P.dll` into Isaac's `Repentogon` directory.
 5. Disable any older Isaac 1v1 mod so only this release is active.
