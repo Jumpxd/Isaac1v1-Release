@@ -13,6 +13,7 @@ local endedLogged = false
 local targetCompletionLogged = false
 local terminalSuppressionLogged = false
 local trackedMatchId = nil
+local localRunCompletedMatchId = nil
 local FINAL_DEATH_CALLBACK_PRIORITY = 1000000
 
 local function value(getter)
@@ -72,21 +73,22 @@ local function submitTerminal(liveIPC, gameState, matchSession, reason, competit
     local session = matchSession ~= nil and matchSession.Get ~= nil and matchSession.Get() or nil
     if liveIPC == nil or liveIPC.SubmitTerminal == nil or matchSession == nil
         or not matchSession.IsActive() or competitiveRun == nil
-        or competitiveRun.IsActiveFor == nil or not competitiveRun.IsActiveFor(session) then return end
+        or competitiveRun.IsActiveFor == nil or not competitiveRun.IsActiveFor(session) then return false end
     if liveIPC.IsMatchFinalized ~= nil and liveIPC.IsMatchFinalized() then
         if not terminalSuppressionLogged then
             terminalSuppressionLogged = true
             Isaac.DebugString("[Isaac1v1P2P] TERMINAL_EVENT_SUPPRESSED reason=\"RESULT_ALREADY_FINAL\"")
         end
-        return
+        return false
     end
     local score = gameState.getVanillaScore()
     if type(score) ~= "number" then
         Isaac.DebugString("[Isaac1v1P2P] MATCH_TERMINAL_DEFERRED reason=\"SCORE_UNAVAILABLE\"")
-        return
+        return false
     end
     local sent, errorMessage = liveIPC.SubmitTerminal(reason, score, gameState.getRunTime())
     Isaac.DebugString("[Isaac1v1P2P] MATCH_TERMINAL_EVENT reason=\"" .. reason .. "\" score=\"" .. tostring(score) .. "\" sent=\"" .. tostring(sent) .. "\"")
+    return true, sent == true, errorMessage, score, gameState.getRunTime()
 end
 
 local function logFinalDeath(gameState, matchSession, liveIPC, competitiveRun)
@@ -202,7 +204,7 @@ local function classifyProgressionBoss(npc)
     return nil
 end
 
-local function resolveBossOutcome(gameState, matchSession, liveIPC, competitiveRun, npc)
+local function resolveBossOutcome(gameState, matchSession, liveIPC, competitiveRun, matchResult, npc)
     if targetCompletionLogged or state ~= STATE_IN_RUN then return false end
     local session, competitive = activeSession(matchSession, competitiveRun)
     if not competitive or session == nil or type(session.targetDestinationId) ~= "string" then return false end
@@ -216,7 +218,16 @@ local function resolveBossOutcome(gameState, matchSession, liveIPC, competitiveR
         targetCompletionLogged = true
         Isaac.DebugString("[Isaac1v1P2P] COMPETITIVE_TARGET_DEFEATED match_id=" .. quote(session.matchId)
             .. " destination=" .. quote(session.targetDestinationId))
-        submitTerminal(liveIPC, gameState, matchSession, "RUN_COMPLETED", competitiveRun)
+        local submitted, _, _, finalScore, finalRunTime =
+            submitTerminal(liveIPC, gameState, matchSession, "RUN_COMPLETED", competitiveRun)
+        if not submitted then
+            Isaac.DebugString("[Isaac1v1P2P] LOCAL_COMPLETION_DEFERRED reason=\"TERMINAL_CAPTURE_FAILED\"")
+            return false
+        end
+        localRunCompletedMatchId = session.matchId
+        if matchResult ~= nil and matchResult.MarkLocalCompletionPending ~= nil then
+            pcall(matchResult.MarkLocalCompletionPending, session.matchId, finalScore, finalRunTime)
+        end
         logRunEnded(gameState, "TARGET_DEFEATED", matchSession)
         competitiveRun.Deactivate("RUN_COMPLETED")
         return true
@@ -251,6 +262,7 @@ function lifecycle.BeginNewMatch(matchId)
     endedLogged = false
     targetCompletionLogged = false
     terminalSuppressionLogged = false
+    localRunCompletedMatchId = nil
     return true
 end
 
@@ -262,6 +274,7 @@ function lifecycle.ResetTerminal()
     endedLogged = false
     targetCompletionLogged = false
     terminalSuppressionLogged = false
+    localRunCompletedMatchId = nil
     return true
 end
 
@@ -303,6 +316,7 @@ local function startRun(gameState, isContinued, matchValidation, matchSession, c
     endedLogged = false
     targetCompletionLogged = false
     terminalSuppressionLogged = false
+    localRunCompletedMatchId = nil
 
     local matchResult = {valid = false}
     if matchValidation ~= nil and matchValidation.Validate ~= nil then
@@ -357,7 +371,7 @@ function lifecycle.Register(mod, gameState, matchValidation, matchSession, liveI
 
     -- REPENTOGON/Isaac emite acest callback când NPC-ul a murit efectiv.
     mod:AddCallback(ModCallbacks.MC_POST_NPC_DEATH, function(_, npc)
-        resolveBossOutcome(gameState, matchSession, liveIPC, competitiveRun, npc)
+        resolveBossOutcome(gameState, matchSession, liveIPC, competitiveRun, matchResult, npc)
     end)
 
     -- Acest callback rulează după verificările vanilla de revive. Este înregistrat
@@ -419,7 +433,15 @@ function lifecycle.Register(mod, gameState, matchValidation, matchSession, liveI
     mod:AddCallback(ModCallbacks.MC_PRE_GAME_EXIT, function(_, shouldSave)
         -- ABANDON/DECONECTARE: Exit Game în STARTED trimite MATCH_DISCONNECT înainte
         -- de dezactivarea locală. Sistemul extern decide apoi rezultatul LOSS.
-        local session, competitive = activeSession(matchSession, competitiveRun)
+        local session = matchSession ~= nil and matchSession.Get ~= nil and matchSession.Get() or nil
+        if localRunCompletedMatchId ~= nil and session ~= nil
+            and session.matchId == localRunCompletedMatchId then
+            Isaac.DebugString("[Isaac1v1P2P] PROGRAMMATIC_COMPLETION_EXIT_IGNORED match_id="
+                .. quote(localRunCompletedMatchId))
+            return
+        end
+        local competitive = competitiveRun ~= nil and competitiveRun.IsActiveFor ~= nil
+            and competitiveRun.IsActiveFor(session)
         if state == STATE_IN_RUN and competitive then
             Isaac.DebugString("[Isaac1v1P2P] COMPETITIVE_EXIT_DETECTED match_id=\""
                 .. tostring(session ~= nil and session.matchId or "")
@@ -433,6 +455,10 @@ function lifecycle.Register(mod, gameState, matchValidation, matchSession, liveI
     end)
 
     Isaac.DebugString("[Isaac1v1P2P] Lifecycle initialized")
+end
+
+function lifecycle.IsLocalRunCompleted(matchId)
+    return type(matchId) == "string" and localRunCompletedMatchId == matchId
 end
 
 return lifecycle

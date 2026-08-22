@@ -13,8 +13,14 @@ local resultTransitionExecuted = false
 local resultTransitionUpdates = 0
 local waitingForPeerResultLogged = false
 local waitingForSafeUpdateLogged = false
+local localCompletionPendingMatchId = nil
+local localCompletionSnapshot = nil
+local localCompletionExitScheduled = false
+local localCompletionExitExecuted = false
+local localCompletionExitUpdates = 0
 local liveIPC = nil
 local SAFE_TRANSITION_UPDATE_DELAY = 30
+local LOCAL_COMPLETION_UPDATE_DELAY = 1
 
 local function quote(value)
     return '"' .. tostring(value):gsub('"', "'") .. '"'
@@ -52,6 +58,27 @@ local function stopCompetitiveRun(result)
     return false
 end
 
+local function stopLocalCompletedRun()
+    if exitRequested or localCompletionSnapshot == nil then return false end
+    exitRequested = true
+    exitRequestedAt = now()
+    exitFailureLogged = false
+    if Game ~= nil then
+        local ok, game = pcall(Game)
+        if ok and game ~= nil and type(game.Fadeout) == "function"
+            and FadeoutTarget ~= nil and FadeoutTarget.SAVEFILE_MENU ~= nil then
+            local fadeOk = pcall(game.Fadeout, game, 0.25, FadeoutTarget.SAVEFILE_MENU)
+            if fadeOk then
+                Isaac.DebugString("[Isaac1v1P2P] LOCAL_COMPLETION_RUN_EXIT_REQUESTED method=\"Game.Fadeout\" target=\"SAVEFILE_MENU\"")
+                return true
+            end
+        end
+    end
+    Isaac.DebugString("[Isaac1v1P2P] LOCAL_COMPLETION_RUN_EXIT_FAILED")
+    exitFailureLogged = true
+    return false
+end
+
 local function checkExitFailure()
     if not exitRequested or exitFailureLogged or exitRequestedAt == nil then return end
     if now() - exitRequestedAt < 5 then return end
@@ -81,6 +108,11 @@ function matchResult.BeginNewMatch(matchId)
     resultTransitionUpdates = 0
     waitingForPeerResultLogged = false
     waitingForSafeUpdateLogged = false
+    localCompletionPendingMatchId = nil
+    localCompletionSnapshot = nil
+    localCompletionExitScheduled = false
+    localCompletionExitExecuted = false
+    localCompletionExitUpdates = 0
     Isaac.DebugString("[Isaac1v1P2P] RESULT_STATE_RESET match_id=" .. quote(matchId))
     return true
 end
@@ -97,8 +129,34 @@ function matchResult.ResetTerminal()
     resultTransitionUpdates = 0
     waitingForPeerResultLogged = false
     waitingForSafeUpdateLogged = false
+    localCompletionPendingMatchId = nil
+    localCompletionSnapshot = nil
+    localCompletionExitScheduled = false
+    localCompletionExitExecuted = false
+    localCompletionExitUpdates = 0
     resetMatchId = nil
     return true
+end
+
+function matchResult.MarkLocalCompletionPending(matchId, score, runTime)
+    if type(matchId) ~= "string" or matchId == "" or type(score) ~= "number" then return false end
+    if localCompletionPendingMatchId == matchId then return true end
+    localCompletionPendingMatchId = matchId
+    localCompletionSnapshot = { matchId = matchId, score = math.floor(score), runTime = runTime }
+    localCompletionExitScheduled = true
+    localCompletionExitExecuted = false
+    localCompletionExitUpdates = 0
+    exitRequested = false
+    exitRequestedAt = nil
+    exitFailureLogged = false
+    waitingForPeerResultLogged = false
+    Isaac.DebugString("[Isaac1v1P2P] LOCAL_COMPLETION_RESULT_PENDING match_id=" .. quote(matchId)
+        .. " score=" .. quote(math.floor(score)))
+    return true
+end
+
+function matchResult.IsLocalCompletionPending(matchId)
+    return type(matchId) == "string" and localCompletionPendingMatchId == matchId
 end
 
 function matchResult.MarkFinalDeathPending(matchId)
@@ -144,6 +202,20 @@ local function advanceResultTransition()
     end
 end
 
+local function advanceLocalCompletionTransition(menu)
+    if localCompletionSnapshot == nil then return end
+    if menu ~= nil and menu.ShowCompletionWaiting ~= nil then
+        pcall(menu.ShowCompletionWaiting, localCompletionSnapshot)
+    end
+    if not localCompletionExitScheduled or localCompletionExitExecuted then return end
+    localCompletionExitUpdates = localCompletionExitUpdates + 1
+    if localCompletionExitUpdates <= LOCAL_COMPLETION_UPDATE_DELAY then return end
+    if stopLocalCompletedRun() then
+        localCompletionExitExecuted = true
+        localCompletionExitScheduled = false
+    end
+end
+
 function matchResult.Register(mod, transport, session, menu, competitiveRun)
     -- Folosește POST_RENDER sau, ca rezervă, POST_UPDATE. Astfel poate continua
     -- să verifice rezultatul și după game over, când alte callback-uri se pot opri.
@@ -156,6 +228,16 @@ function matchResult.Register(mod, transport, session, menu, competitiveRun)
         local ok, status = pcall(liveIPC.GetStatus)
         if not ok or status == nil then return end
         if status.result == nil then
+            if localCompletionPendingMatchId ~= nil then
+                if not waitingForPeerResultLogged then
+                    waitingForPeerResultLogged = true
+                    Isaac.DebugString("[Isaac1v1P2P] RESULT_TRANSITION_WAITING reason=\"PEER_RESULT\" match_id="
+                        .. quote(localCompletionPendingMatchId))
+                end
+                advanceLocalCompletionTransition(menu)
+                checkExitFailure()
+                return
+            end
             if terminalResultPendingMatchId ~= nil and not waitingForPeerResultLogged then
                 waitingForPeerResultLogged = true
                 Isaac.DebugString("[Isaac1v1P2P] RESULT_TRANSITION_WAITING reason=\"PEER_RESULT\" match_id="
@@ -166,9 +248,11 @@ function matchResult.Register(mod, transport, session, menu, competitiveRun)
         local resultMatchId = status.result.matchId
         local isPendingFinalDeath = terminalResultPendingMatchId ~= nil
             and terminalResultPendingMatchId == resultMatchId
+        local isPendingLocalCompletion = localCompletionPendingMatchId ~= nil
+            and localCompletionPendingMatchId == resultMatchId
         local wasCompetitive = competitiveRun ~= nil and competitiveRun.WasCompetitiveMatch ~= nil
             and competitiveRun.WasCompetitiveMatch(resultMatchId)
-        if not isPendingFinalDeath and not wasCompetitive then return end
+        if not isPendingFinalDeath and not isPendingLocalCompletion and not wasCompetitive then return end
         if lastResultMatchId ~= resultMatchId then
             exitRequested = false
             exitRequestedAt = nil
@@ -179,7 +263,9 @@ function matchResult.Register(mod, transport, session, menu, competitiveRun)
             if menu ~= nil and menu.ShowResult ~= nil then
                 pcall(menu.ShowResult, status.result)
             end
-            scheduleResultTransition(status.result)
+            if not isPendingLocalCompletion or not localCompletionExitExecuted then
+                scheduleResultTransition(status.result)
+            end
             return
         end
         advanceResultTransition()

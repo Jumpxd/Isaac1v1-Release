@@ -8,6 +8,7 @@ local STATE_MATCH_FOUND = "MATCH_FOUND"
 local STATE_STARTING = "STARTING"
 local STATE_ERROR = "ONLINE_ERROR"
 local STATE_PENDING = "COMMAND_PENDING"
+local STATE_WAITING_RESULT = "WAITING_RESULT"
 local STATE_RESULT = "RESULT"
 
 local active = false
@@ -33,6 +34,7 @@ local hostLayersCaptured = false
 local hostExtraRecords = {}
 local hostExtrasCaptured = false
 local resultSnapshot = nil
+local completionSnapshot = nil
 local resultMappingLoggedMatchId = nil
 
 local function resetOpeningState()
@@ -432,6 +434,8 @@ local function back()
         requestCancel()
     elseif state == STATE_CANCELLING then
         return
+    elseif state == STATE_WAITING_RESULT then
+        return
     else
         if state == STATE_ERROR and runLauncher ~= nil
             and type(runLauncher.ClearError) == "function" then
@@ -549,7 +553,7 @@ requestCancel = function()
         selection = 1
         return
     end
-    local leaveOk, sent, leaveError = pcall(cancel)
+    local leaveOk, sent, leaveError = pcall(cancel, "PRE_START_CANCEL")
     if leaveOk and sent == true then
         state = STATE_CANCELLING
         selection = 1
@@ -734,7 +738,9 @@ local function renderDedicatedScreen()
             selection = 1
         end
         if state ~= STATE_STARTING then state = STATE_MATCH_FOUND end
-    elseif state == STATE_CANCELLING and ipcStatus.queue == "IDLE" then
+    elseif ipcStatus.queue == "IDLE" and (state == STATE_CANCELLING
+        or state == STATE_MATCH_FOUND or state == STATE_STARTING
+        or state == STATE_SEARCHING) then
         state = STATE_MAIN
         selection = 1
         Isaac.DebugString("[Isaac1v1P2P] MENU_1V1_STATE state=\"MAIN_1V1\"")
@@ -780,6 +786,7 @@ local function renderDedicatedScreen()
     if state == STATE_STARTING then subtitle = "STARTING MATCH..." end
     if state == STATE_ERROR then subtitle = "ONLINE ERROR" end
     if state == STATE_PENDING then subtitle = "COMMAND SENT" end
+    if state == STATE_WAITING_RESULT then subtitle = nil end
     if state == STATE_RESULT then subtitle = nil end
     if subtitle ~= nil then renderText(subtitle, 165, 66, color) end
 
@@ -789,7 +796,7 @@ local function renderDedicatedScreen()
     if state == STATE_SEARCHING then optionStartY = 172 end
     if state == STATE_MATCH_FOUND then optionStartY = 190 end
     if state == STATE_ERROR then optionStartY = 166 end
-    if options ~= nil and state ~= STATE_RESULT then
+    if options ~= nil and state ~= STATE_RESULT and state ~= STATE_WAITING_RESULT then
         for index, option in ipairs(options) do
             local prefix = index == selection and "> " or "  "
             renderText(prefix .. option, 178, optionStartY + ((index - 1) * 28),
@@ -873,6 +880,12 @@ local function renderDedicatedScreen()
             renderAvatar(ipcStatus.player, 164, 79)
             renderText("PLAYER: " .. playerPersona(ipcStatus.player), 184, 72, color)
         end
+    elseif state == STATE_WAITING_RESULT then
+        local waiting = completionSnapshot or {}
+        renderCenteredText("ISAAC 1V1", 240, 48, color)
+        renderCenteredText("RUN COMPLETED", 240, 82, selectedColor)
+        renderCenteredText("SCORE: " .. tostring(waiting.score or "UNKNOWN"), 240, 112, color)
+        renderCenteredText("WAITING FOR OPPONENT...", 240, 146, color)
     elseif state == STATE_RESULT then
         -- RESULT: compară câștigătorul și cauza finală cu playerul Steam local,
         -- apoi afișează VICTORY, DEFEAT sau DRAW.
@@ -953,6 +966,7 @@ function menu.ShowResult(result)
     -- copie pentru ca rezultatul să rămână disponibil după ieșirea din run.
     if type(result) ~= "table" or type(result.matchId) ~= "string" then return false end
     resetOpeningState()
+    completionSnapshot = nil
     resultSnapshot = result
     if active then
         state = STATE_RESULT
@@ -962,10 +976,26 @@ function menu.ShowResult(result)
     return true
 end
 
+function menu.ShowCompletionWaiting(snapshot)
+    if type(snapshot) ~= "table" or type(snapshot.matchId) ~= "string" then return false end
+    completionSnapshot = {
+        matchId = snapshot.matchId,
+        score = snapshot.score,
+        runTime = snapshot.runTime,
+    }
+    if not active then pcall(menu.Open) end
+    if active then
+        state = STATE_WAITING_RESULT
+        selection = 1
+    end
+    return true
+end
+
 function menu.BeginNewMatch(matchId)
     -- Un ID nou invalidează toate prompturile, selecțiile și rezultatele vechi.
     if type(matchId) ~= "string" or matchId == "" then return false end
     resultSnapshot = nil
+    completionSnapshot = nil
     resultMappingLoggedMatchId = nil
     resetOpeningState()
     return true
@@ -973,6 +1003,7 @@ end
 
 function menu.ResetTerminal()
     resultSnapshot = nil
+    completionSnapshot = nil
     resultMappingLoggedMatchId = nil
     resetOpeningState()
     return true

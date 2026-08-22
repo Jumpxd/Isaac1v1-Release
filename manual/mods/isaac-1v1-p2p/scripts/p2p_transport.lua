@@ -77,6 +77,8 @@ local terminalObservationSequence = 0
 local resultSequence = 0
 local lastResultSequence = 0
 local pendingClose = nil
+local localGameplayFinished = false
+local localGameplayFinishedMatchId = nil
 local CLOSE_ACK_TIMEOUT_SECONDS = 1.5
 local ACK_FLUSH_GRACE_SECONDS = 0.25
 
@@ -162,6 +164,8 @@ local function resetMatchNetwork()
     resultSequence = 0
     lastResultSequence = 0
     pendingClose = nil
+    localGameplayFinished = false
+    localGameplayFinishedMatchId = nil
     networkCleanupAt = nil
     networkCleanupDone = false
 end
@@ -622,6 +626,19 @@ local function finalize(result)
     return true
 end
 
+local function clearPreStartPresentation()
+    if matchConfig ~= nil then cancelledMatchIds[matchConfig.matchId] = true end
+    matchState = nil
+    matchControl = nil
+    startRequest = nil
+    startConsumed = false
+    localReady = false
+    peerReady = false
+    localStarted = false
+    peerStarted = false
+    onlineError = nil
+end
+
 local function authorityFinalize(winnerId, isDraw, terminalReason, terminalPlayerId)
     if identity.steamId64 ~= ownerSteamId or finalizedMatchId ~= nil then return false end
     resultSequence = resultSequence + 1
@@ -805,9 +822,17 @@ local function handleMatchCancel(message)
     if sequence == nil or sequence < 1 or sequence % 1 ~= 0 then
         return false, "INVALID_CANCEL_SEQUENCE"
     end
+    local reason = tostring(message.fields.cancel_reason or "PRE_START_CANCEL")
     sendMessage("MATCH_CANCEL_ACK", { cancel_sequence = sequence })
+    if queueState == "STARTED" or localStarted then
+        log("MATCH_CANCEL_IGNORED reason=\"ALREADY_STARTED\" sequence=" .. quote(sequence))
+        return true
+    end
+    clearPreStartPresentation()
     setQueue("IDLE")
     beginPendingClose("CANCEL", sequence, false, false)
+    log("MATCH_CANCEL_RECEIVED sequence=" .. quote(sequence)
+        .. " reason=" .. quote(reason))
     return true
 end
 
@@ -842,6 +867,7 @@ local function validateEnvelope(event, message)
     end
     if matchConfig ~= nil and message.type ~= "HELLO" and message.type ~= "HEARTBEAT"
         and message.type ~= "MATCH_FAIL"
+        and message.type ~= "MATCH_CANCEL" and message.type ~= "MATCH_CANCEL_ACK"
         and fields.match_id ~= matchConfig.matchId then
         fail("MATCH_ID_MISMATCH", true)
         return false
@@ -1029,7 +1055,15 @@ function transport.Update()
                     finalize(result)
                 end
             elseif queueState ~= "RESULT" and queueState ~= "IDLE" then
-                fail(event.detail or "PEER_DISCONNECTED", false)
+                local cancelledMatchId = matchConfig ~= nil and matchConfig.matchId or nil
+                if cancelledMatchId ~= nil then cancelledMatchIds[cancelledMatchId] = true end
+                closeNetwork(false)
+                resetMatchNetwork()
+                peerPersona = "Unknown"
+                onlineError = nil
+                setQueue("IDLE")
+                log("MATCH_CANCEL_FALLBACK reason=" .. quote(event.detail or "PEER_LEFT")
+                    .. " match_id=" .. quote(cancelledMatchId or "<none>"))
             end
         end
         if queueState == "ERROR" then return end
@@ -1064,13 +1098,18 @@ function transport.JoinQueue()
     return true
 end
 
-function transport.LeaveQueue()
-    if queueState == "STARTED" then return false, "MATCH_ALREADY_STARTED" end
+function transport.LeaveQueue(cancelReason)
+    if queueState == "STARTED" or localStarted then return false, "MATCH_ALREADY_STARTED" end
     leaveRequestedAt = now()
     if transportActive and peerSteamId ~= "0" then
+        if matchConfig ~= nil then cancelledMatchIds[matchConfig.matchId] = true end
         local cancelSequence = outboundSequence + 1
-        local sent, reason = sendMessage("MATCH_CANCEL", { cancel_sequence = cancelSequence })
+        local sent, reason = sendMessage("MATCH_CANCEL", {
+            cancel_sequence = cancelSequence,
+            cancel_reason = cancelReason or "PRE_START_CANCEL",
+        })
         if not sent then return false, reason end
+        clearPreStartPresentation()
         setQueue("CANCELLING")
         beginPendingClose("CANCEL", cancelSequence, true, true)
     else
@@ -1082,9 +1121,9 @@ function transport.LeaveQueue()
     return true
 end
 
-function transport.CancelMatch()
+function transport.CancelMatch(cancelReason)
     if matchConfig ~= nil then cancelledMatchIds[matchConfig.matchId] = true end
-    return transport.LeaveQueue()
+    return transport.LeaveQueue(cancelReason)
 end
 
 function transport.Ready()
@@ -1154,6 +1193,12 @@ function transport.SubmitTerminal(reason, score, runTime)
     local sent, sendReason, claimSequence = sendTerminalClaim(reason, localScore, localRunTime)
     observeTerminal(true, { reason = reason, score = localScore,
         runTime = localRunTime, sequence = claimSequence })
+    if reason == "RUN_COMPLETED" then
+        localGameplayFinished = true
+        localGameplayFinishedMatchId = matchConfig.matchId
+        log("LOCAL_GAMEPLAY_FINISHED match_id=" .. quote(matchConfig.matchId)
+            .. " session=" .. quote("CONNECTED_WAITING_FOR_RESULT"))
+    end
     log("MATCH_TERMINAL_EVENT reason=" .. quote(reason) .. " score=" .. quote(localScore))
     evaluateTerminals()
     return sent, sendReason
@@ -1207,6 +1252,10 @@ function transport.GetActiveMods(forceRefresh)
     return mods
 end
 
+function transport.IsLocalGameplayFinished(matchId)
+    return localGameplayFinished == true and localGameplayFinishedMatchId == matchId
+end
+
 function transport.BeginCompetitiveResultTransition(matchId)
     if finalizedMatchId ~= matchId then return false end
     competitiveResultTransition = true
@@ -1256,6 +1305,8 @@ function transport.GetStatus()
         startRequest = startRequest,
         error = onlineError,
         result = queueState == "RESULT" and resultState or nil,
+        localGameplay = localGameplayFinished and "FINISHED_WAITING" or "ACTIVE",
+        sessionConnected = transportActive == true,
     }
 end
 
