@@ -2,7 +2,7 @@
 local protocol = {}
 
 protocol.VERSION = "2"
-protocol.BUILD = "0.2.0-alpha.3"
+protocol.BUILD = "0.2.0-alpha.4"
 protocol.CATALOG = "production-catalog-1"
 protocol.MAGIC = "I1V1P2P"
 

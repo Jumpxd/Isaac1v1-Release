@@ -1,4 +1,4 @@
-# Isaac 1v1 v0.2.0-alpha.3
+# Isaac 1v1 v0.2.0-alpha.4
 
 Isaac 1v1 is an experimental competitive mod for **The Binding of Isaac:
 Repentance+**. Matchmaking and match synchronization use Steam lobbies and
@@ -10,18 +10,12 @@ parity, and native core tests, but the published package has not been live-teste
 in two running Isaac instances by the release automation. Expect rough edges and
 report reproducible issues with the standard Isaac or REPENTOGON log attached.
 
-## What changed in alpha.3
+## What changed in alpha.4
 
-- Complete competitive mod allowlist enforcement, including content-only and
-  XML-only mods.
-- Legacy Isaac 1v1 mod conflict detection.
-- Canonical character names in matchmaking and results.
-- Authority-based result arbitration for terminal-event races.
-- Safer cancel and abandon delivery with bounded acknowledgements.
-- Correct abandon results for peer/network disconnects.
-- REPENTOGON minimum-version compatibility checks.
-- Clearer errors for DLL installation, Steam identity, matchmaking, and
-  networking readiness.
+- Fixed REPENTOGON version detection when the game runs from REPENTOGON's
+  private `Repentogon\isaac-ng.exe` copy.
+- Fixed Isaac root and `mods` directory resolution for the same runtime layout.
+- Added explicit Windows download-unblock guidance for the unsigned alpha DLL.
 
 These changes are covered by automated native and Lua tests. Two-account live
 validation in Isaac remains to be performed separately.
@@ -50,11 +44,14 @@ competitive state, and restores vanilla save and console behavior.
 ## Install
 
 1. Close Isaac and the REPENTOGON launcher.
-2. Download and extract `Isaac1v1-v0.2.0-alpha.3.zip`.
-3. Copy `mods\isaac-1v1-p2p` into Isaac's `mods` directory.
-4. Copy `Repentogon\zhlIsaac1v1SteamP2P.dll` into Isaac's `Repentogon` directory.
-5. Disable any older Isaac 1v1 mod so only this release is active.
-6. Start Isaac through REPENTOGON and enable **Isaac 1v1** in the Mods menu.
+2. Download `Isaac1v1-v0.2.0-alpha.4.zip`.
+3. Before extracting, right-click the ZIP, select **Properties**, enable
+   **Unblock** if it is shown, then click **Apply**.
+4. Extract the ZIP.
+5. Copy `mods\isaac-1v1-p2p` into Isaac's `mods` directory.
+6. Copy `Repentogon\zhlIsaac1v1SteamP2P.dll` into Isaac's `Repentogon` directory.
+7. Disable any older Isaac 1v1 mod so only this release is active.
+8. Start Isaac through REPENTOGON and enable **Isaac 1v1** in the Mods menu.
 
 The final layout should contain:
 
@@ -78,6 +75,11 @@ HUD are included.
 
 ## Troubleshooting
 
+- This alpha DLL is not Authenticode-signed. Windows may preserve the Internet
+  security marker from the downloaded ZIP and block the extracted DLL. Unblock
+  the ZIP before extraction. If it was already extracted, open the DLL's
+  **Properties**, enable **Unblock**, and apply it. Do not disable Windows
+  Security globally; verify the SHA-256 value instead.
 - Confirm both players use this exact version and are visible online in Steam.
 - Confirm REPENTOGON loads `zhlIsaac1v1SteamP2P.dll` and no older Isaac 1v1 mod
   is enabled.
