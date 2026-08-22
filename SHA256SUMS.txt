@@ -1,3 +1,3 @@
-395fd79f7b6a8551f0e3e6b6dcec20e54d9413b777a10be073ef18454c91978b  Isaac1v1-v0.2.0-alpha.4.zip
+72c8b003b6cae102db99787526dfaa91577a467452fd6e4353503082ffeebc57  Isaac1v1-v0.2.0-alpha.4.zip
 0f594788a7aee7bb6eaa809e84a2a0070ef33f9d37679b590c1a0fc0517a6160  manual/Repentogon/zhlIsaac1v1SteamP2P.dll
-b0537a2e8f94e0d7b8899ec47a37d211b0f78bb6e6bc32e3ea67bc4c8c9ed9a1  release-manifest.json
+45d8f89dae5be71d752bd41e746134580737a3a12f313311ec060f8cbbab710f  release-manifest.json

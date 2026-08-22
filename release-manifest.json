@@ -7,7 +7,7 @@
   "source": {
     "repository": "https://github.com/Jumpxd/Isaac1v1",
     "branch": "codex/p2p-parity-alpha3",
-    "commit": "1c624d57127dd60af1ed684b2bacb2e2f56e0301"
+    "commit": "33e47c0fb4043674519bafeb74df292d220c0674"
   },
   "requirements": {
     "game": "The Binding of Isaac: Repentance+ 1.9.7.12",
