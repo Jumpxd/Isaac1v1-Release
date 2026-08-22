@@ -1,5 +1,6 @@
 -- Canonical, deterministic final snapshot shared by both Steam peers.
 local stats = {}
+local canonicalCharacters = include("scripts/canonical_character_catalog.lua")
 
 local function jsonString(value)
     local text = tostring(value or "")
@@ -32,6 +33,8 @@ end
 function stats.Build(context)
     if type(context) ~= "table" or type(context.matchId) ~= "string"
         or type(context.completedAt) ~= "string" then return nil, "INVALID_STATS_CONTEXT" end
+    local characterName = canonicalCharacters.GetName(context.characterType)
+    if characterName == nil then return nil, "INVALID_STATS_CHARACTER" end
     local authorityRunTime = normalizedRunTime(context.authorityRunTime)
     local peerRunTime = normalizedRunTime(context.peerRunTime)
     local draw = context.isDraw == true
@@ -47,7 +50,7 @@ function stats.Build(context)
         durationSeconds = math.max(
             stats.RunTimeSeconds(authorityRunTime) or 0,
             stats.RunTimeSeconds(peerRunTime) or 0),
-        character = { type = context.characterType, name = context.characterName },
+        character = { type = context.characterType, name = characterName },
         target = { id = context.targetDestinationId, name = context.targetDestinationName },
         players = {
             {

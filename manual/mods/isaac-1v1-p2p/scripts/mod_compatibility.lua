@@ -92,18 +92,36 @@ function compatibility.GetAllowedModMetadata()
     return allowlist.entries
 end
 
-function compatibility.GetCompetitiveModCompatibility()
+function compatibility.GetCompetitiveModCompatibility(forceRefresh)
     -- Este apelată înainte de JOIN_QUEUE și din nou înainte de StartNewGame. Întoarce
     -- listele permise/blocate fără să modifice configurația modurilor jucătorului.
-    local active, detection = nil, "TRANSPORT_ACTIVE_MOD_METADATA"
+    local active, providerReason, detection = nil, nil, "NATIVE_FULL_MOD_INVENTORY"
     if type(activeModProvider) == "function" then
-        local ok, value = pcall(activeModProvider)
-        if ok and type(value) == "table" then active = value end
+        local ok, value, reason = pcall(activeModProvider, forceRefresh == true)
+        if ok and type(value) == "table" then active = value
+        else providerReason = ok and reason or value end
     end
-    if active == nil then active, detection = loadedModuleFallback() end
+    if active == nil then
+        local diagnostic = loadedModuleFallback()
+        logResult(diagnostic, {}, {})
+        return {
+            compatible = false,
+            activeAllowedMods = {},
+            conflictingMods = {},
+            detection = "INVENTORY_UNAVAILABLE_FAIL_CLOSED",
+            reason = "MOD_INVENTORY_UNAVAILABLE",
+            inventoryError = tostring(providerReason or "NATIVE_MOD_INVENTORY_UNAVAILABLE"),
+        }
+    end
 
     local allowed, conflicts = {}, {}
+    local legacyActive = false
     for _, item in ipairs(active) do
+        local folder = normalized(item.folder)
+        local directory = normalized(item.directory)
+        if folder == normalized("isaac-1v1") or directory == normalized("isaac-1v1") then
+            legacyActive = true
+        end
         local entry, implicit = resolve(item)
         if not implicit then
             if entry ~= nil then
@@ -128,6 +146,8 @@ function compatibility.GetCompetitiveModCompatibility()
         activeAllowedMods = allowed,
         conflictingMods = conflicts,
         detection = detection,
+        reason = legacyActive and "LEGACY_MOD_ACTIVE"
+            or (#conflicts > 0 and "MOD_NOT_ALLOWED" or nil),
     }
 end
 

@@ -162,14 +162,15 @@ local function startFromSession(session, gameState, matchBridge, liveIPC, liveSt
     if modCompatibility ~= nil and modCompatibility.GetCompetitiveModCompatibility ~= nil then
         -- ALLOWLIST: repetă verificarea chiar înainte de pornire. Dacă modurile au
         -- fost schimbate după intrarea în coadă, run-ul competitiv este blocat.
-        local compatibilityOk, result = pcall(modCompatibility.GetCompetitiveModCompatibility)
-        if compatibilityOk and result ~= nil and result.compatible == false then
+        local compatibilityOk, result = pcall(modCompatibility.GetCompetitiveModCompatibility, true)
+        if not compatibilityOk or result == nil or result.compatible ~= true then
             local names = {}
-            for _, conflict in ipairs(result.conflictingMods or {}) do
+            for _, conflict in ipairs(result ~= nil and result.conflictingMods or {}) do
                 names[#names + 1] = type(conflict) == "table" and tostring(conflict.displayName) or tostring(conflict)
             end
-            unavailable("MOD_NOT_ALLOWED")
-            Isaac.DebugString('[Isaac1v1P2P] MATCHMAKING_BLOCKED reason="MOD_NOT_ALLOWED"')
+            local blockReason = result ~= nil and result.reason or "MOD_INVENTORY_UNAVAILABLE"
+            unavailable(blockReason)
+            Isaac.DebugString('[Isaac1v1P2P] MATCHMAKING_BLOCKED reason="' .. tostring(blockReason) .. '"')
             Isaac.DebugString("[Isaac1v1P2P] COMPETITIVE_MOD_CONFLICT mods=" .. quote(table.concat(names, ",")))
             if liveIPC ~= nil and liveIPC.CancelMatch ~= nil then pcall(liveIPC.CancelMatch) end
             return false
@@ -380,6 +381,13 @@ end
 
 function runLauncher.GetStatus() return status end
 function runLauncher.GetLastError() return lastError end
+function runLauncher.ClearError()
+    if status == "ERROR" then
+        status = "WAITING"
+        lastError = nil
+    end
+    return true
+end
 
 function runLauncher.Register(mod, matchSession, gameState, matchValidation, matchBridge, liveIPC, competitiveRun, modCompatibility)
     -- Instalează cele două callback-uri ale pornirii: consumarea cererii din meniu

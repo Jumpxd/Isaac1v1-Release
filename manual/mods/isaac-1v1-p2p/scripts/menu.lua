@@ -391,14 +391,15 @@ local function beginFindMatch()
     -- CICLUL MECIULUI: intrarea în coadă. Verifică mai întâi allowlist-ul, apoi
     -- trimite JOIN_QUEUE și trece UI-ul în SEARCHING dacă cererea reușește.
     if modCompatibility ~= nil and modCompatibility.GetCompetitiveModCompatibility ~= nil then
-        local compatibilityOk, result = pcall(modCompatibility.GetCompetitiveModCompatibility)
-        if compatibilityOk and result ~= nil and result.compatible == false then
-            local conflict = type(result.conflictingMods) == "table" and result.conflictingMods[1] or nil
+        local compatibilityOk, result = pcall(modCompatibility.GetCompetitiveModCompatibility, true)
+        if not compatibilityOk or result == nil or result.compatible ~= true then
+            local conflict = result ~= nil and type(result.conflictingMods) == "table"
+                and result.conflictingMods[1] or nil
             pendingConflictName = type(conflict) == "table" and conflict.displayName or tostring(conflict or "")
-            pendingError = "MOD_NOT_ALLOWED"
+            pendingError = result ~= nil and result.reason or "MOD_INVENTORY_UNAVAILABLE"
             state = STATE_ERROR
             selection = 1
-            Isaac.DebugString('[Isaac1v1P2P] MATCHMAKING_BLOCKED reason="MOD_NOT_ALLOWED"')
+            Isaac.DebugString('[Isaac1v1P2P] MATCHMAKING_BLOCKED reason="' .. tostring(pendingError) .. '"')
             return
         end
     end
@@ -432,6 +433,10 @@ local function back()
     elseif state == STATE_CANCELLING then
         return
     else
+        if state == STATE_ERROR and runLauncher ~= nil
+            and type(runLauncher.ClearError) == "function" then
+            pcall(runLauncher.ClearError)
+        end
         state = STATE_MAIN
         selection = 1
         Isaac.DebugString("[Isaac1v1P2P] MENU_1V1_STATE state=\"MAIN_1V1\"")
@@ -460,7 +465,8 @@ local function activateSelection()
             local statusOk, status = pcall(liveIPC.GetStatus)
             if not statusOk or type(status) ~= "table"
                 or status.transport ~= "READY" then
-                pendingError = "STEAM_P2P_UNAVAILABLE"
+                pendingError = type(status) == "table" and status.error
+                    or "STEAM_P2P_UNAVAILABLE"
                 state = STATE_ERROR
                 selection = 1
                 return
@@ -814,16 +820,26 @@ local function renderDedicatedScreen()
     elseif state == STATE_STARTING then
         renderText("SYNCING MATCH SETTINGS", 158, 144, color)
     elseif state == STATE_ERROR then
-        local message = pendingError == "P2P_COMPONENT_NOT_AVAILABLE" and "P2P COMPONENT NOT INSTALLED"
-            or pendingError == "STEAM_P2P_UNAVAILABLE" and "STEAM P2P UNAVAILABLE"
+        local message = pendingError == "P2P_COMPONENT_NOT_AVAILABLE" and "ISAAC 1V1 COMPONENT NOT INSTALLED"
+            or pendingError == "STEAM_P2P_UNAVAILABLE" and "STEAM MATCHMAKING UNAVAILABLE"
+            or pendingError == "STEAM_MATCHMAKING_UNAVAILABLE" and "STEAM MATCHMAKING UNAVAILABLE"
+            or pendingError == "STEAM_NETWORKING_UNAVAILABLE" and "STEAM NETWORKING UNAVAILABLE"
             or pendingError == "PEER_SYNC_FAILED" and "MATCH SYNC FAILED"
-            or pendingError == "STEAM_IDENTITY_NOT_FOUND" and "STEAM UNAVAILABLE"
+            or pendingError == "STEAM_IDENTITY_NOT_FOUND" and "STEAM IS NOT AVAILABLE"
+            or pendingError == "REPENTOGON_UPDATE_REQUIRED" and "REPENTOGON UPDATE REQUIRED"
+            or pendingError == "MOD_INVENTORY_UNAVAILABLE" and "MOD INVENTORY UNAVAILABLE"
+            or pendingError == "LEGACY_MOD_ACTIVE" and "LEGACY ISAAC 1V1 MOD ACTIVE"
             or pendingError == "MOD_NOT_ALLOWED" and "MOD NOT ALLOWED"
             or pendingError == "MOD_CONFIGURATION_CHANGED" and "MOD CONFIGURATION CHANGED"
             or pendingError == "LEAVE_FAILED" and "LEAVE FAILED"
             or tostring(pendingError or "ONLINE ERROR")
         renderText(message, 170, 112, selectedColor)
-        if pendingError == "MOD_NOT_ALLOWED" then
+        if pendingError == "LEGACY_MOD_ACTIVE" then
+            renderText("Disable the legacy Isaac 1v1 mod", 143, 136, selectedColor)
+            renderText("before playing P2P.", 184, 158, color)
+        elseif pendingError == "MOD_INVENTORY_UNAVAILABLE" then
+            renderText("CANNOT VERIFY ACTIVE MODS", 158, 142, color)
+        elseif pendingError == "MOD_NOT_ALLOWED" then
             if pendingConflictName ~= nil and pendingConflictName ~= "" then
                 local display = tostring(pendingConflictName):upper()
                 if #display > 34 then display = display:sub(1, 31) .. "..." end
@@ -843,8 +859,16 @@ local function renderDedicatedScreen()
             renderText("PLEASE WAIT", 195, 140, color)
         end
     elseif state == STATE_MAIN then
-        if ipcStatus.component ~= "INSTALLED" or ipcStatus.transport ~= "READY" then
-            renderText("P2P COMPONENT NOT INSTALLED", 145, 72, selectedColor)
+        if ipcStatus.component ~= "INSTALLED" then
+            renderText("ISAAC 1V1 COMPONENT NOT INSTALLED", 126, 72, selectedColor)
+        elseif ipcStatus.repentogon ~= "SUPPORTED" then
+            renderText("REPENTOGON UPDATE REQUIRED", 152, 72, selectedColor)
+        elseif ipcStatus.steamIdentity ~= "AVAILABLE" then
+            renderText("STEAM IS NOT AVAILABLE", 166, 72, selectedColor)
+        elseif ipcStatus.matchmaking ~= "READY" then
+            renderText("STEAM MATCHMAKING UNAVAILABLE", 140, 72, selectedColor)
+        elseif ipcStatus.networking ~= "READY" then
+            renderText("STEAM NETWORKING UNAVAILABLE", 146, 72, selectedColor)
         else
             renderAvatar(ipcStatus.player, 164, 79)
             renderText("PLAYER: " .. playerPersona(ipcStatus.player), 184, 72, color)

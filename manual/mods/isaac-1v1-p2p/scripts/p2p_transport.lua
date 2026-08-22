@@ -2,9 +2,17 @@
 local transport = {}
 local protocol = include("scripts/protocol.lua")
 local destinationCatalog = include("scripts/destination_catalog.lua")
+local canonicalCharacters = include("scripts/canonical_character_catalog.lua")
 local statsSnapshot = include("scripts/stats_snapshot.lua")
 
 local componentInstalled = false
+local p2pApiReady = false
+local moduleActive = false
+local steamIdentityAvailable = false
+local steamMatchmakingReady = false
+local networkingReady = false
+local repentogonCompatible = false
+local nextIdentityRefreshAt = 0
 local identity = nil
 local playerState = nil
 local queueState = "IDLE"
@@ -63,6 +71,14 @@ local terminalResetHandler = nil
 local networkCleanupAt = nil
 local networkCleanupDone = false
 local statsSubmittedMatchIds = {}
+local terminalClaimSequence = 0
+local lastPeerTerminalClaimSequence = 0
+local terminalObservationSequence = 0
+local resultSequence = 0
+local lastResultSequence = 0
+local pendingClose = nil
+local CLOSE_ACK_TIMEOUT_SECONDS = 1.5
+local ACK_FLUSH_GRACE_SECONDS = 0.25
 
 local function now()
     if Isaac ~= nil and type(Isaac.GetTime) == "function" then return Isaac.GetTime() / 1000 end
@@ -91,7 +107,14 @@ local function apiAvailable()
         "SteamP2PGetState", "SteamP2PSend", "SteamP2PPollEvents", "SteamP2PLeave",
     }
     for _, name in ipairs(names) do if type(_G[name]) ~= "function" then return false end end
+    if type(Isaac1v1P2P.GetRuntimeStatus) ~= "function"
+        or type(Isaac1v1P2P.GetActiveMods) ~= "function" then return false end
     return true
+end
+
+local function componentApiAvailable()
+    return type(Isaac1v1P2P) == "table"
+        and type(Isaac1v1P2P.SetIsaac1v1Active) == "function"
 end
 
 local function copyList(values)
@@ -133,6 +156,12 @@ local function resetMatchNetwork()
     nextScoreAt = 0
     localTerminal = nil
     peerTerminal = nil
+    terminalClaimSequence = 0
+    lastPeerTerminalClaimSequence = 0
+    terminalObservationSequence = 0
+    resultSequence = 0
+    lastResultSequence = 0
+    pendingClose = nil
     networkCleanupAt = nil
     networkCleanupDone = false
 end
@@ -147,6 +176,7 @@ local function closeNetwork(useCancel)
     ownerSteamId = "0"
     peerSteamId = "0"
     frozenOwnerSteamId = nil
+    pendingClose = nil
 end
 
 local function beginNewMatch(payload)
@@ -182,8 +212,8 @@ local function sendMessage(messageType, fields)
     payload.sequence = outboundSequence
     if matchConfig ~= nil and payload.match_id == nil then payload.match_id = matchConfig.matchId end
     local ok, sent, reason = pcall(SteamP2PSend, protocol.Encode(messageType, payload))
-    if not ok or sent ~= true then return false, tostring(ok and reason or sent) end
-    return true
+    if not ok or sent ~= true then return false, tostring(ok and reason or sent), outboundSequence end
+    return true, nil, outboundSequence
 end
 
 local function fail(reason, notifyPeer)
@@ -215,17 +245,6 @@ local function randomIndex(count)
     if count <= 1 then return 1 end
     local value = type(Random) == "function" and Random() or math.random(1, 2147483646)
     return (math.abs(tonumber(value) or 0) % count) + 1
-end
-
-local function characterName(characterType)
-    if EntityConfig ~= nil and type(EntityConfig.GetPlayer) == "function" then
-        local ok, config = pcall(EntityConfig.GetPlayer, characterType)
-        if ok and config ~= nil and type(config.GetName) == "function" then
-            local nameOk, name = pcall(config.GetName, config)
-            if nameOk and type(name) == "string" and name ~= "" then return name end
-        end
-    end
-    return "PlayerType " .. tostring(characterType)
 end
 
 local function sessionForLocal(config)
@@ -287,7 +306,7 @@ local function makeAuthorityConfig()
         authoritySteamId = ownerSteamId,
         seed = seed,
         characterType = characterType,
-        characterName = characterName(characterType),
+        characterName = canonicalCharacters.GetName(characterType),
         targetDestinationId = targetId,
         targetDestinationName = destination.name,
         build = protocol.BUILD,
@@ -392,7 +411,7 @@ local function handleConfig(message, senderSteamId)
     end
     config.characterName = message.fields.character_name
     if type(config.characterName) ~= "string" or config.characterName == "" then return false, "CHARACTER_NAME_MISSING" end
-    if config.characterName ~= characterName(config.characterType) then
+    if config.characterName ~= canonicalCharacters.GetName(config.characterType) then
         return false, "CHARACTER_CONFIG_MISMATCH"
     end
     matchConfig = config
@@ -583,7 +602,7 @@ local function resultForLocal(winnerId, isDraw, terminalReason, terminalPlayerId
     }
 end
 
-local function finalize(result, notifyPeer)
+local function finalize(result)
     if finalizedMatchId ~= nil then
         if result ~= nil and result.matchId == finalizedMatchId and result.statsSnapshot ~= nil then
             resultState = result
@@ -600,57 +619,67 @@ local function finalize(result, notifyPeer)
         .. " local_result=" .. quote(result.localResult)
         .. " terminal_reason=" .. quote(result.terminalReason))
     submitFinalStats(result)
-    if notifyPeer then
-        local authorityScore = identity.steamId64 == ownerSteamId and localScore or peerScore
-        local nonAuthorityScore = identity.steamId64 == ownerSteamId and peerScore or localScore
-        local authorityRunTime = identity.steamId64 == ownerSteamId and localRunTime or peerRunTime
-        local nonAuthorityRunTime = identity.steamId64 == ownerSteamId and peerRunTime or localRunTime
-        local snapshot = result.statsSnapshot
-        sendMessage("RESULT", {
-            match_id = result.matchId,
-            winner_steam_id = result.winnerPlayerId or "0",
-            terminal_player_id = result.terminalPlayerId or "0",
-            terminal_reason = result.terminalReason or "RUN_COMPLETED",
-            is_draw = result.isDraw and "1" or "0",
-            authority_score = authorityScore,
-            peer_score = nonAuthorityScore,
-            authority_run_time = authorityRunTime,
-            peer_run_time = nonAuthorityRunTime,
-            completed_at = snapshot ~= nil and snapshot.completedAt or "",
-            authority_persona = snapshot ~= nil and snapshot.players[1].persona or "",
-            peer_persona = snapshot ~= nil and snapshot.players[2].persona or "",
-        })
-    end
     return true
 end
 
+local function authorityFinalize(winnerId, isDraw, terminalReason, terminalPlayerId)
+    if identity.steamId64 ~= ownerSteamId or finalizedMatchId ~= nil then return false end
+    resultSequence = resultSequence + 1
+    local result = resultForLocal(winnerId, isDraw, terminalReason, terminalPlayerId,
+        localScore, peerScore)
+    result.resultVersion = 1
+    result.resultSequence = resultSequence
+    attachCurrentAuthorityStats(result)
+    local snapshot = result.statsSnapshot
+    local sent, reason = sendMessage("MATCH_RESULT", {
+        match_id = result.matchId,
+        result_version = result.resultVersion,
+        result_sequence = result.resultSequence,
+        winner_steam_id = result.winnerPlayerId or "0",
+        terminal_player_id = result.terminalPlayerId or "0",
+        terminal_reason = result.terminalReason or "RUN_COMPLETED",
+        is_draw = result.isDraw and "1" or "0",
+        authority_score = localScore,
+        peer_score = peerScore,
+        authority_run_time = localRunTime,
+        peer_run_time = peerRunTime,
+        completed_at = snapshot ~= nil and snapshot.completedAt or "",
+        authority_persona = snapshot ~= nil and snapshot.players[1].persona or "",
+        peer_persona = snapshot ~= nil and snapshot.players[2].persona or "",
+    })
+    if not sent then log("MATCH_RESULT_SEND_FAILED reason=" .. quote(reason)) end
+    finalize(result)
+    return sent
+end
+
+local function observeTerminal(isLocal, terminal)
+    terminalObservationSequence = terminalObservationSequence + 1
+    terminal.order = terminalObservationSequence
+    if isLocal then localTerminal = terminal else peerTerminal = terminal end
+end
+
 local function evaluateTerminals()
-    if finalizedMatchId ~= nil or matchConfig == nil then return end
+    if finalizedMatchId ~= nil or matchConfig == nil
+        or identity.steamId64 ~= ownerSteamId then return end
     local losing = { DEATH = true, WRONG_DESTINATION = true, ABANDON = true }
+    local losingTerminal, losingPlayer = nil, nil
     if localTerminal ~= nil and losing[localTerminal.reason] then
-        local result = resultForLocal(peerSteamId, false, localTerminal.reason, identity.steamId64,
-            identity.steamId64 == ownerSteamId and localScore or peerScore,
-            identity.steamId64 == ownerSteamId and peerScore or localScore)
-        if identity.steamId64 == ownerSteamId then attachCurrentAuthorityStats(result) end
-        finalize(result, identity.steamId64 == ownerSteamId)
-        return
+        losingTerminal, losingPlayer = localTerminal, identity.steamId64
     end
-    if peerTerminal ~= nil and losing[peerTerminal.reason] then
-        local result = resultForLocal(identity.steamId64, false, peerTerminal.reason, peerSteamId,
-            ownerSteamId == identity.steamId64 and localScore or peerScore,
-            ownerSteamId == identity.steamId64 and peerScore or localScore)
-        if identity.steamId64 == ownerSteamId then attachCurrentAuthorityStats(result) end
-        finalize(result, identity.steamId64 == ownerSteamId)
+    if peerTerminal ~= nil and losing[peerTerminal.reason]
+        and (losingTerminal == nil or peerTerminal.order < losingTerminal.order) then
+        losingTerminal, losingPlayer = peerTerminal, peerSteamId
+    end
+    if losingTerminal ~= nil then
+        local winner = losingPlayer == identity.steamId64 and peerSteamId or identity.steamId64
+        authorityFinalize(winner, false, losingTerminal.reason, losingPlayer)
         return
     end
     if localTerminal ~= nil and peerTerminal ~= nil
-        and localTerminal.reason == "RUN_COMPLETED" and peerTerminal.reason == "RUN_COMPLETED"
-        and identity.steamId64 == ownerSteamId then
+        and localTerminal.reason == "RUN_COMPLETED" and peerTerminal.reason == "RUN_COMPLETED" then
         local draw = localScore == peerScore
         local winner = draw and nil or (localScore > peerScore and identity.steamId64 or peerSteamId)
-        local result = resultForLocal(winner, draw, "RUN_COMPLETED", nil, localScore, peerScore)
-        attachCurrentAuthorityStats(result)
-        finalize(result, true)
+        authorityFinalize(winner, draw, "RUN_COMPLETED", nil)
     end
 end
 
@@ -663,17 +692,134 @@ local function handleResult(message, senderSteamId)
     local authorityScore = tonumber(fields.authority_score)
     local nonAuthorityScore = tonumber(fields.peer_score)
     if authorityScore == nil or nonAuthorityScore == nil then return false, "RESULT_SCORE_INVALID" end
+    local incomingVersion = tonumber(fields.result_version)
+    local incomingSequence = tonumber(fields.result_sequence)
+    if incomingVersion ~= 1 or incomingSequence == nil or incomingSequence % 1 ~= 0 then
+        return false, "RESULT_VERSION_INVALID"
+    end
+    if incomingSequence <= lastResultSequence then
+        log("MATCH_RESULT_IGNORED reason=\"DUPLICATE_OR_STALE\"")
+        return true
+    end
+    lastResultSequence = incomingSequence
     local draw = fields.is_draw == "1"
     local winner = fields.winner_steam_id ~= "0" and fields.winner_steam_id or nil
     local terminalPlayer = fields.terminal_player_id ~= "0" and fields.terminal_player_id or nil
     local result = resultForLocal(winner, draw, fields.terminal_reason, terminalPlayer,
         authorityScore, nonAuthorityScore)
+    result.resultVersion = incomingVersion
+    result.resultSequence = incomingSequence
     if fields.completed_at ~= "" then
         attachStatsSnapshot(result, fields.completed_at, authorityScore, nonAuthorityScore,
             fields.authority_run_time, fields.peer_run_time,
             fields.authority_persona, fields.peer_persona)
     end
-    return finalize(result, false)
+    return finalize(result)
+end
+
+local function beginPendingClose(kind, sequence, useCancel, waitForAck)
+    pendingClose = {
+        kind = kind,
+        sequence = sequence,
+        useCancel = useCancel == true,
+        waitForAck = waitForAck == true,
+        acked = false,
+        deadline = now() + (waitForAck and CLOSE_ACK_TIMEOUT_SECONDS or ACK_FLUSH_GRACE_SECONDS),
+    }
+    log(kind .. "_CLOSE_PENDING sequence=" .. quote(sequence)
+        .. " wait_for_ack=" .. quote(waitForAck == true))
+end
+
+local function processPendingClose()
+    if pendingClose == nil then return false end
+    local close = pendingClose
+    if close.waitForAck and not close.acked and now() < close.deadline then return false end
+    if not close.waitForAck and now() < close.deadline then return false end
+    if close.waitForAck and not close.acked then
+        log(close.kind .. "_ACK_TIMEOUT sequence=" .. quote(close.sequence))
+    else
+        log(close.kind .. "_ACK_CONFIRMED sequence=" .. quote(close.sequence))
+    end
+    closeNetwork(close.useCancel)
+    if close.kind == "CANCEL" then
+        resetMatchNetwork()
+        setQueue("IDLE")
+    end
+    return true
+end
+
+local function sendTerminalClaim(reason, score, runTime)
+    terminalClaimSequence = terminalClaimSequence + 1
+    local sent, failure = sendMessage("TERMINAL_CLAIM", {
+        terminal_reason = reason,
+        terminal_sequence = terminalClaimSequence,
+        final_score = score,
+        run_time = runTime or "00:00",
+    })
+    return sent, failure, terminalClaimSequence
+end
+
+local function handleTerminalClaim(message)
+    local fields = message.fields
+    local claimSequence = tonumber(fields.terminal_sequence)
+    local score = tonumber(fields.final_score)
+    local reason = fields.terminal_reason
+    local validReason = reason == "DEATH" or reason == "RUN_COMPLETED"
+        or reason == "WRONG_DESTINATION" or reason == "ABANDON"
+    if claimSequence == nil or claimSequence < 1 or claimSequence % 1 ~= 0
+        or score == nil or not validReason then return false, "INVALID_TERMINAL_CLAIM" end
+    sendMessage("TERMINAL_ACK", { terminal_sequence = claimSequence })
+    if claimSequence <= lastPeerTerminalClaimSequence or finalizedMatchId ~= nil then
+        log("TERMINAL_CLAIM_IGNORED reason=\"DUPLICATE_STALE_OR_FINAL\" sequence="
+            .. quote(claimSequence))
+        return true
+    end
+    lastPeerTerminalClaimSequence = claimSequence
+    peerScore = math.floor(score)
+    peerRunTime = fields.run_time or peerRunTime
+    observeTerminal(false, {
+        reason = reason,
+        score = peerScore,
+        runTime = peerRunTime,
+        sequence = claimSequence,
+    })
+    log("TERMINAL_CLAIM_ACCEPTED player=" .. quote(peerSteamId)
+        .. " reason=" .. quote(reason) .. " sequence=" .. quote(claimSequence))
+    evaluateTerminals()
+    return true
+end
+
+local function handleTerminalAck(message)
+    local sequence = tonumber(message.fields.terminal_sequence)
+    if sequence == nil or sequence % 1 ~= 0 then return false, "INVALID_TERMINAL_ACK" end
+    if pendingClose ~= nil and pendingClose.kind == "ABANDON"
+        and pendingClose.sequence == sequence then
+        pendingClose.acked = true
+        log("ABANDON_ACK_RECEIVED sequence=" .. quote(sequence))
+    end
+    return true
+end
+
+local function handleMatchCancel(message)
+    local sequence = tonumber(message.fields.cancel_sequence)
+    if sequence == nil or sequence < 1 or sequence % 1 ~= 0 then
+        return false, "INVALID_CANCEL_SEQUENCE"
+    end
+    sendMessage("MATCH_CANCEL_ACK", { cancel_sequence = sequence })
+    setQueue("IDLE")
+    beginPendingClose("CANCEL", sequence, false, false)
+    return true
+end
+
+local function handleMatchCancelAck(message)
+    local sequence = tonumber(message.fields.cancel_sequence)
+    if sequence == nil or sequence % 1 ~= 0 then return false, "INVALID_CANCEL_ACK" end
+    if pendingClose ~= nil and pendingClose.kind == "CANCEL"
+        and pendingClose.sequence == sequence then
+        pendingClose.acked = true
+        log("MATCH_CANCEL_ACK_RECEIVED sequence=" .. quote(sequence))
+    end
+    return true
 end
 
 local function validateEnvelope(event, message)
@@ -725,21 +871,11 @@ local function handleDataEvent(event)
             peerScore = math.floor(score)
             peerRunTime = message.fields.run_time or peerRunTime
         end
-    elseif message.type == "DEATH" or message.type == "RUN_COMPLETED"
-        or message.type == "WRONG_DESTINATION" or message.type == "ABANDON" then
-        local score = tonumber(message.fields.final_score)
-        if score == nil then ok, failure = false, "INVALID_TERMINAL_SCORE"
-        else
-            peerScore = math.floor(score)
-            peerRunTime = message.fields.run_time or peerRunTime
-            peerTerminal = { reason = message.type, score = peerScore, runTime = peerRunTime }
-            evaluateTerminals()
-        end
-    elseif message.type == "RESULT" then ok, failure = handleResult(message, event.steam_id64)
-    elseif message.type == "MATCH_CANCEL" then
-        closeNetwork(false)
-        resetMatchNetwork()
-        setQueue("IDLE")
+    elseif message.type == "TERMINAL_CLAIM" then ok, failure = handleTerminalClaim(message)
+    elseif message.type == "TERMINAL_ACK" then ok, failure = handleTerminalAck(message)
+    elseif message.type == "MATCH_RESULT" then ok, failure = handleResult(message, event.steam_id64)
+    elseif message.type == "MATCH_CANCEL" then ok, failure = handleMatchCancel(message)
+    elseif message.type == "MATCH_CANCEL_ACK" then ok, failure = handleMatchCancelAck(message)
     elseif message.type == "HEARTBEAT" then
         -- Native heartbeats own timeout detection; this message binds liveness to match identity.
     else ok, failure = false, "UNEXPECTED_MESSAGE_" .. tostring(message.type) end
@@ -776,17 +912,37 @@ local function observeState(snapshot)
     return true
 end
 
-function transport.Initialize()
-    if REPENTOGON == nil or not apiAvailable() then
-        componentInstalled = false
+local function refreshReadiness(force)
+    if not componentInstalled then return false, "P2P_COMPONENT_NOT_AVAILABLE" end
+    if not p2pApiReady then return false, "STEAM_MATCHMAKING_UNAVAILABLE" end
+    local current = now()
+    if not force and current < nextIdentityRefreshAt then return steamIdentityAvailable end
+    nextIdentityRefreshAt = current + 2
+    local statusOk, nativeStatus = pcall(Isaac1v1P2P.GetRuntimeStatus)
+    if not statusOk or type(nativeStatus) ~= "table" then
+        moduleActive, steamIdentityAvailable = false, false
+        steamMatchmakingReady, networkingReady = false, false
         onlineError = "P2P_COMPONENT_NOT_AVAILABLE"
-        return false
+        return false, onlineError
     end
-    local steamIdentity, reason = SteamP2PGetIdentity()
-    if type(steamIdentity) ~= "table" then
-        componentInstalled = false
-        onlineError = reason or "STEAM_IDENTITY_NOT_FOUND"
-        return false
+    moduleActive = nativeStatus.module_active == true
+    repentogonCompatible = nativeStatus.repentogon_compatible == true
+    if not repentogonCompatible then
+        steamIdentityAvailable, steamMatchmakingReady, networkingReady = false, false, false
+        onlineError = "REPENTOGON_UPDATE_REQUIRED"
+        return false, onlineError
+    end
+    local callOk, steamIdentity, reason = pcall(SteamP2PGetIdentity)
+    if not callOk or type(steamIdentity) ~= "table" then
+        steamIdentityAvailable, steamMatchmakingReady, networkingReady = false, false, false
+        local detail = tostring(callOk and reason or steamIdentity)
+        if detail:lower():find("offline", 1, true) or detail:find("SteamID", 1, true)
+            or detail:find("steam_api.dll", 1, true) then
+            onlineError = "STEAM_IDENTITY_NOT_FOUND"
+        else
+            onlineError = "STEAM_MATCHMAKING_UNAVAILABLE"
+        end
+        return false, onlineError
     end
     identity = {
         steamId64 = tostring(steamIdentity.steam_id64),
@@ -797,13 +953,44 @@ function transport.Initialize()
         steamId64 = identity.steamId64,
         personaName = identity.personaName,
         displayName = identity.personaName,
-        avatar = type(steamIdentity.avatar_path) == "string"
-            and steamIdentity.avatar_path or nil,
+        avatar = type(steamIdentity.avatar_path) == "string" and steamIdentity.avatar_path or nil,
     }
+    local refreshedOk, refreshed = pcall(Isaac1v1P2P.GetRuntimeStatus)
+    if refreshedOk and type(refreshed) == "table" then
+        moduleActive = refreshed.module_active == true
+        steamIdentityAvailable = refreshed.steam_identity_available == true
+        steamMatchmakingReady = refreshed.steam_matchmaking_ready == true
+        networkingReady = refreshed.networking_ready == true
+    else
+        steamIdentityAvailable, steamMatchmakingReady, networkingReady = true, true, true
+    end
+    if not steamMatchmakingReady then onlineError = "STEAM_MATCHMAKING_UNAVAILABLE"
+    elseif not networkingReady then onlineError = "STEAM_NETWORKING_UNAVAILABLE"
+    else onlineError = nil end
+    return onlineError == nil, onlineError
+end
+
+function transport.Initialize()
+    if REPENTOGON == nil or not componentApiAvailable() then
+        componentInstalled = false
+        onlineError = "P2P_COMPONENT_NOT_AVAILABLE"
+        return false
+    end
     componentInstalled = true
-    onlineError = nil
-    log("P2P_COMPONENT_READY steam_id=" .. quote(identity.steamId64)
-        .. " persona=" .. quote(identity.personaName))
+    p2pApiReady = apiAvailable()
+    if not p2pApiReady then
+        moduleActive = true
+        onlineError = "STEAM_MATCHMAKING_UNAVAILABLE"
+        log("P2P_COMPONENT_LOADED readiness=" .. quote(onlineError))
+        return true
+    end
+    local ready = refreshReadiness(true)
+    if ready then
+        log("P2P_COMPONENT_READY steam_id=" .. quote(identity.steamId64)
+            .. " persona=" .. quote(identity.personaName))
+    else
+        log("P2P_COMPONENT_LOADED readiness=" .. quote(onlineError))
+    end
     return true
 end
 
@@ -812,6 +999,7 @@ function transport.Update()
     local current = now()
     if lastUpdateAt == current then return end
     lastUpdateAt = current
+    if not transportActive and p2pApiReady then refreshReadiness(false) end
     if queueState == "RESULT" and networkCleanupAt ~= nil and current >= networkCleanupAt
         and not networkCleanupDone then
         closeNetwork(false)
@@ -821,17 +1009,25 @@ function transport.Update()
     end
     if not transportActive then return end
     local snapshot = SteamP2PGetState()
-    if type(snapshot) ~= "table" or not observeState(snapshot) then return end
+    if type(snapshot) ~= "table" or not observeState(snapshot) then
+        processPendingClose()
+        return
+    end
     for _, event in ipairs(SteamP2PPollEvents() or {}) do
         if event.type == "MESSAGE" then handleDataEvent(event)
         elseif event.type == "DISCONNECTED" or event.type == "ERROR" then
             if queueState == "STARTED" or localStarted then
-                peerTerminal = { reason = "ABANDON", score = peerScore }
-                local result = resultForLocal(identity.steamId64, false, "DISCONNECT", peerSteamId,
-                    ownerSteamId == identity.steamId64 and localScore or peerScore,
-                    ownerSteamId == identity.steamId64 and peerScore or localScore)
-                attachCurrentAuthorityStats(result)
-                finalize(result, false)
+                if identity.steamId64 == ownerSteamId then
+                    observeTerminal(false, { reason = "ABANDON", score = peerScore,
+                        runTime = peerRunTime, sequence = lastPeerTerminalClaimSequence + 1 })
+                    evaluateTerminals()
+                else
+                    local result = resultForLocal(identity.steamId64, false, "ABANDON", peerSteamId,
+                        peerScore, localScore)
+                    result.resultVersion = 1
+                    result.resultSequence = lastResultSequence + 1
+                    finalize(result)
+                end
             elseif queueState ~= "RESULT" and queueState ~= "IDLE" then
                 fail(event.detail or "PEER_DISCONNECTED", false)
             end
@@ -842,10 +1038,13 @@ function transport.Update()
         nextHeartbeatAt = current + 2
         sendMessage("HEARTBEAT", {})
     end
+    processPendingClose()
 end
 
 function transport.JoinQueue()
     if not componentInstalled then return false, "P2P_COMPONENT_NOT_AVAILABLE" end
+    local ready, readinessReason = refreshReadiness(true)
+    if not ready then return false, readinessReason end
     if queueState ~= "IDLE" then return false, "REQUEST_IN_FLIGHT" end
     if type(availableCharacterTypes) ~= "table" or #availableCharacterTypes == 0
         or type(availableDestinationIds) ~= "table" or #availableDestinationIds == 0 then
@@ -868,11 +1067,18 @@ end
 function transport.LeaveQueue()
     if queueState == "STARTED" then return false, "MATCH_ALREADY_STARTED" end
     leaveRequestedAt = now()
-    if transportActive and peerSteamId ~= "0" then sendMessage("MATCH_CANCEL", {}) end
-    closeNetwork(true)
-    resetMatchNetwork()
-    setQueue("IDLE")
-    log("QUEUE_CANCELLED")
+    if transportActive and peerSteamId ~= "0" then
+        local cancelSequence = outboundSequence + 1
+        local sent, reason = sendMessage("MATCH_CANCEL", { cancel_sequence = cancelSequence })
+        if not sent then return false, reason end
+        setQueue("CANCELLING")
+        beginPendingClose("CANCEL", cancelSequence, true, true)
+    else
+        closeNetwork(true)
+        resetMatchNetwork()
+        setQueue("IDLE")
+        log("QUEUE_CANCELLED")
+    end
     return true
 end
 
@@ -937,6 +1143,7 @@ end
 
 function transport.SubmitTerminal(reason, score, runTime)
     if finalizedMatchId ~= nil then return false, "RESULT_ALREADY_FINAL" end
+    if localTerminal ~= nil then return false, "TERMINAL_ALREADY_SUBMITTED" end
     if matchConfig == nil or (queueState ~= "STARTED" and not localStarted) then return false, "MATCH_NOT_STARTED" end
     if reason ~= "DEATH" and reason ~= "RUN_COMPLETED" and reason ~= "WRONG_DESTINATION" then
         return false, "INVALID_TERMINAL_REASON"
@@ -944,8 +1151,9 @@ function transport.SubmitTerminal(reason, score, runTime)
     localScore = math.floor(tonumber(score) or localScore or 0)
     if type(runTime) == "string" then localRunTime = runTime end
     transport.SubmitScore(localScore, runTime, true)
-    local sent, sendReason = sendMessage(reason, { final_score = localScore, run_time = runTime or "Unknown" })
-    localTerminal = { reason = reason, score = localScore, runTime = localRunTime }
+    local sent, sendReason, claimSequence = sendTerminalClaim(reason, localScore, localRunTime)
+    observeTerminal(true, { reason = reason, score = localScore,
+        runTime = localRunTime, sequence = claimSequence })
     log("MATCH_TERMINAL_EVENT reason=" .. quote(reason) .. " score=" .. quote(localScore))
     evaluateTerminals()
     return sent, sendReason
@@ -953,11 +1161,15 @@ end
 
 function transport.DisconnectMatch(matchId)
     if matchConfig == nil or matchConfig.matchId ~= matchId then return false, "INVALID_MATCH_ID" end
+    if pendingClose ~= nil then return false, "CLOSE_ALREADY_PENDING" end
+    if localTerminal ~= nil then return false, "TERMINAL_ALREADY_SUBMITTED" end
     localScore = math.floor(tonumber(localScore) or 0)
-    if transportActive then sendMessage("ABANDON", { final_score = localScore, run_time = localRunTime }) end
-    localTerminal = { reason = "ABANDON", score = localScore, runTime = localRunTime }
+    local sent, reason, claimSequence = sendTerminalClaim("ABANDON", localScore, localRunTime)
+    if not sent then return false, reason end
+    observeTerminal(true, { reason = "ABANDON", score = localScore,
+        runTime = localRunTime, sequence = claimSequence })
     evaluateTerminals()
-    closeNetwork(false)
+    beginPendingClose("ABANDON", claimSequence, false, true)
     return true
 end
 function transport.SubmitDisconnect(matchId) return transport.DisconnectMatch(matchId) end
@@ -983,7 +1195,17 @@ function transport.SetTerminalResetHandler(handler)
     return true
 end
 function transport.SetCompetitiveModAllowlist() return true end
-function transport.GetActiveMods() return nil end
+function transport.GetActiveMods(forceRefresh)
+    if not componentInstalled or type(Isaac1v1P2P) ~= "table"
+        or type(Isaac1v1P2P.GetActiveMods) ~= "function" then
+        return nil, "NATIVE_MOD_INVENTORY_UNAVAILABLE"
+    end
+    local ok, mods, reason = pcall(Isaac1v1P2P.GetActiveMods, forceRefresh == true)
+    if not ok or type(mods) ~= "table" then
+        return nil, tostring(ok and reason or mods)
+    end
+    return mods
+end
 
 function transport.BeginCompetitiveResultTransition(matchId)
     if finalizedMatchId ~= matchId then return false end
@@ -1019,7 +1241,14 @@ end
 function transport.GetStatus()
     return {
         component = componentInstalled and "INSTALLED" or "NOT INSTALLED",
-        transport = componentInstalled and "READY" or "UNAVAILABLE",
+        module = moduleActive and "ACTIVE" or "INACTIVE",
+        steamIdentity = steamIdentityAvailable and "AVAILABLE" or "UNAVAILABLE",
+        matchmaking = steamMatchmakingReady and "READY" or "UNAVAILABLE",
+        networking = networkingReady and "READY" or "UNAVAILABLE",
+        repentogon = repentogonCompatible and "SUPPORTED" or "UPDATE_REQUIRED",
+        transport = componentInstalled and moduleActive and steamIdentityAvailable
+            and steamMatchmakingReady and networkingReady and repentogonCompatible
+            and "READY" or "UNAVAILABLE",
         player = playerState,
         queue = queueState,
         match = resultState or matchState,

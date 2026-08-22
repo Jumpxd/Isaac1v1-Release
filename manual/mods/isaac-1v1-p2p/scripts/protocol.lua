@@ -1,8 +1,8 @@
 -- Pure Steam P2P message codec and validation helpers.
 local protocol = {}
 
-protocol.VERSION = "1"
-protocol.BUILD = "0.2.0-alpha.2"
+protocol.VERSION = "2"
+protocol.BUILD = "0.2.0-alpha.3"
 protocol.CATALOG = "production-catalog-1"
 protocol.MAGIC = "I1V1P2P"
 

@@ -31,7 +31,8 @@ allowlist.entries = {
     {workshopId = "2575911103", canonicalName = "Specialist Dance for Good Items", aliases = {"specialistforgooditems"}},
 }
 
-allowlist.implicitAliases = {"isaac-1v1", "isaac-1v1-p2p", "repentogon"}
--- Mod-ul Isaac 1v1 și REPENTOGON sunt infrastructură și sunt permise automat.
+allowlist.implicitAliases = {"isaac-1v1-p2p", "repentogon"}
+-- Numai modul P2P și REPENTOGON sunt infrastructură permisă. Modul legacy
+-- isaac-1v1 trebuie dezactivat pentru a evita două sisteme competitive simultan.
 
 return allowlist
